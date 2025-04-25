@@ -1,5 +1,6 @@
 import argparse, os
 import cv2
+from datetime import datetime
 import torch
 import numpy as np
 from omegaconf import OmegaConf
@@ -65,7 +66,7 @@ def parse_args():
         type=str,
         nargs="?",
         help="dir to write results to",
-        default="outputs/txt2img-samples"
+        default=f"outputs/txt2img-samples/{datetime.now().strftime('%d-%m-%Y_%H-%M-%S')}"
     )
     parser.add_argument(
         "--steps",
@@ -227,6 +228,9 @@ def main(opt):
 
     os.makedirs(opt.outdir, exist_ok=True)
     outpath = opt.outdir
+    # save prompt to file
+    with open(os.path.join(outpath, "prompt.txt"), "w") as f:
+        f.write(opt.prompt)
 
     print("Creating invisible watermark encoder (see https://github.com/ShieldMnt/invisible-watermark)...")
     wm = "SDV2"
