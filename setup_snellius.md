@@ -53,7 +53,7 @@ Load required modules and run the model:
 
 ```bash
 module load 2022
-module load CUDA/11.3.0
+module load CUDA/11.7.0
 ```
 
 ```bash

@@ -17,6 +17,7 @@ from functools import partial
 import itertools
 from tqdm import tqdm
 from torchvision.utils import make_grid
+from transformers import CLIPProcessor, CLIPModel
 from pytorch_lightning.utilities.distributed import rank_zero_only
 from omegaconf import ListConfig
 
@@ -533,6 +534,7 @@ class LatentDiffusion(DDPM):
                  scale_factor=1.0,
                  scale_by_std=False,
                  force_null_conditioning=False,
+                 use_image_encodings=False,
                  *args, **kwargs):
         self.force_null_conditioning = force_null_conditioning
         self.num_timesteps_cond = default(num_timesteps_cond, 1)
@@ -578,6 +580,18 @@ class LatentDiffusion(DDPM):
             print(" +++++++++++ WARNING: RESETTING NUM_EMA UPDATES TO ZERO +++++++++++ ")
             assert self.use_ema
             self.model_ema.reset_num_updates()
+
+        ################################
+        self.use_image_encodings = use_image_encodings
+        # TODO: allow for different img encoders (?) 
+        # Use CLIP as the default image encoder
+        if self.use_image_encodings:
+            self.clip_model = CLIPModel.from_pretrained("openai/clip-vit-large-patch14")
+            self.clip_processor = CLIPProcessor.from_pretrained("openai/clip-vit-large-patch14")
+            self.clip_model.eval()
+            for param in self.clip_model.parameters():
+                param.requires_grad = False
+        ################################
 
     def make_cond_schedule(self, ):
         self.cond_ids = torch.full(size=(self.num_timesteps,), fill_value=self.num_timesteps - 1, dtype=torch.long)
@@ -792,6 +806,14 @@ class LatentDiffusion(DDPM):
                 c = xc
             if bs is not None:
                 c = c[:bs]
+            
+            # TODO: double check!
+            if self.use_image_encodings:
+                # add image encodings using CLIP
+                clip_inputs = self.clip_processor(images=x, return_tensors="pt").to(self.device)
+                clip_features = self.clip_model.get_image_features(**clip_inputs)
+                # concatenate text and img encodings
+                c = torch.cat([c, clip_features], dim=1)
 
             if self.use_positional_encodings:
                 pos_x, pos_y = self.compute_latent_shifts(batch)
