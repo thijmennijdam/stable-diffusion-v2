@@ -72,7 +72,7 @@ uv run python scripts/txt2img.py \
 
 ```bash
 module load 2022
-module load CUDA/11.3.0
+module load CUDA/11.7.0
 module load Anaconda3/2023.07-2  # or try Anaconda3/2022.*
 ```
 
