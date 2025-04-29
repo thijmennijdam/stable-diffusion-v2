@@ -13,6 +13,7 @@ from pytorch_lightning import seed_everything
 from torch import autocast
 from contextlib import nullcontext
 from imwatermark import WatermarkEncoder
+import wandb
 
 from ldm.util import instantiate_from_config
 from ldm.models.diffusion.ddim import DDIMSampler
@@ -200,6 +201,23 @@ def parse_args():
         action='store_true',
         help="Use bfloat16",
     )
+    parser.add_argument(
+        "--wandb",
+        action='store_true',
+        help="log intermediate images to wandb",
+    )
+    parser.add_argument(
+        "--wandb_entity",
+        type=str,
+        default=None,
+        help="wandb entity name",
+    )
+    parser.add_argument(
+        "--wandb_project",
+        type=str,
+        default="stable-diffusion-v2",
+        help="wandb project name",
+    )
     opt = parser.parse_args()
     return opt
 
@@ -334,6 +352,15 @@ def main(opt):
             for _ in range(3):
                 x_samples_ddim = model.decode_first_stage(samples_ddim)
 
+    if opt.wandb:
+        wandb_run_name = f"txt2img-{datetime.now().strftime('%d-%m-%Y_%H-%M-%S')}"
+        wandb.init(
+            project=opt.wandb_project, 
+            entity=opt.wandb_entity,
+            name=wandb_run_name,
+            config=vars(opt)
+        )
+
     precision_scope = autocast if opt.precision=="autocast" or opt.bf16 else nullcontext
     with torch.no_grad(), \
         precision_scope(opt.device), \
@@ -348,6 +375,21 @@ def main(opt):
                         prompts = list(prompts)
                     c = model.get_learned_conditioning(prompts)
                     shape = [opt.C, opt.H // opt.f, opt.W // opt.f]
+
+                    def wandb_img_callback(pred_x0, i):
+                        if not opt.wandb:
+                            return
+                        
+                        # Convert to image format wandb can handle
+                        images = []
+                        for x_sample in pred_x0:
+                            x_sample = model.decode_first_stage(x_sample.unsqueeze(0))[0]
+                            x_sample = torch.clamp((x_sample + 1.0) / 2.0, min=0.0, max=1.0)
+                            x_sample = 255. * rearrange(x_sample.cpu().numpy(), 'c h w -> h w c')
+                            images.append(wandb.Image(x_sample.astype(np.uint8), caption=f"Step {i}"))
+                        
+                        wandb.log({"intermediate_samples": images}, step=i)
+
                     samples, _ = sampler.sample(S=opt.steps,
                                                      conditioning=c,
                                                      batch_size=opt.n_samples,
@@ -356,7 +398,8 @@ def main(opt):
                                                      unconditional_guidance_scale=opt.scale,
                                                      unconditional_conditioning=uc,
                                                      eta=opt.ddim_eta,
-                                                     x_T=start_code)
+                                                     x_T=start_code,
+                                                     img_callback=wandb_img_callback if opt.wandb else None)
 
                     x_samples = model.decode_first_stage(samples)
                     x_samples = torch.clamp((x_samples + 1.0) / 2.0, min=0.0, max=1.0)
@@ -382,6 +425,9 @@ def main(opt):
             grid = put_watermark(grid, wm_encoder)
             grid.save(os.path.join(outpath, f'grid-{grid_count:04}.png'))
             grid_count += 1
+
+    if opt.wandb:
+        wandb.finish()
 
     print(f"Your samples are ready and waiting for you here: \n{outpath} \n"
           f" \nEnjoy.")
