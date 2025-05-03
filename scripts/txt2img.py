@@ -14,11 +14,13 @@ from torch import autocast
 from contextlib import nullcontext
 from imwatermark import WatermarkEncoder
 import wandb
-
+from dotenv import load_dotenv
 from ldm.util import instantiate_from_config
 from ldm.models.diffusion.ddim import DDIMSampler
 from ldm.models.diffusion.plms import PLMSSampler
 from ldm.models.diffusion.dpm_solver import DPMSolverSampler
+
+load_dotenv()
 
 torch.set_grad_enabled(False)
 
@@ -206,18 +208,6 @@ def parse_args():
         action='store_true',
         help="log intermediate images to wandb",
     )
-    parser.add_argument(
-        "--wandb_entity",
-        type=str,
-        default=None,
-        help="wandb entity name",
-    )
-    parser.add_argument(
-        "--wandb_project",
-        type=str,
-        default="stable-diffusion-v2",
-        help="wandb project name",
-    )
     opt = parser.parse_args()
     return opt
 
@@ -232,6 +222,9 @@ def put_watermark(img, wm_encoder=None):
 
 def main(opt):
     seed_everything(opt.seed)
+    # Set project and entity name from environment variables
+    opt.wandb_project = os.getenv("WANDB_PROJECT", "stable-diffusion-v2")
+    opt.wandb_entity = os.getenv("WANDB_ENTITY", "FoMo-2025")
 
     config = OmegaConf.load(f"{opt.config}")
     device = torch.device("cuda") if opt.device == "cuda" else torch.device("cpu")
