@@ -204,11 +204,6 @@ def parse_args():
         help="Use bfloat16",
     )
     parser.add_argument(
-        "--wandb",
-        action='store_true',
-        help="log intermediate images to wandb",
-    )
-    parser.add_argument(
         "--log_steps",
         nargs="+",
         type=int,
@@ -352,14 +347,13 @@ def main(opt):
             for _ in range(3):
                 x_samples_ddim = model.decode_first_stage(samples_ddim)
 
-    if opt.wandb:
-        wandb_run_name = f"txt2img-{datetime.now().strftime('%d-%m-%Y_%H-%M-%S')}"
-        wandb.init(
-            project=opt.wandb_project, 
-            entity=opt.wandb_entity,
-            name=wandb_run_name,
-            config=vars(opt)
-        )
+    wandb_run_name = f"txt2img-{datetime.now().strftime('%d-%m-%Y_%H-%M-%S')}"
+    wandb.init(
+        project=opt.wandb_project, 
+        entity=opt.wandb_entity,
+        name=wandb_run_name,
+        config=vars(opt)
+    )
 
     precision_scope = autocast if opt.precision=="autocast" or opt.bf16 else nullcontext
     with torch.no_grad(), \
@@ -367,9 +361,6 @@ def main(opt):
         model.ema_scope():
             all_samples = list()
             def wandb_img_callback(pred_x0, i):
-                if not opt.wandb:
-                    return
-                
                 total_steps = opt.steps
                 log_steps = [s if s >= 0 else total_steps-1 for s in opt.log_steps]
                 
@@ -430,7 +421,7 @@ def main(opt):
                                                      unconditional_conditioning=uc,
                                                      eta=opt.ddim_eta,
                                                      x_T=start_code,
-                                                     img_callback=wandb_img_callback if opt.wandb else None)
+                                                     img_callback=wandb_img_callback)
 
                     x_samples = model.decode_first_stage(samples)
                     x_samples = torch.clamp((x_samples + 1.0) / 2.0, min=0.0, max=1.0)
@@ -458,7 +449,7 @@ def main(opt):
             grid_count += 1
     
     # After sampling completes
-    if opt.wandb and hasattr(wandb_img_callback, 'stored_images'):
+    if hasattr(wandb_img_callback, 'stored_images'):
         # Group by diffusion steps to maintain slider functionality
         step_to_batch = {}
         
@@ -484,8 +475,7 @@ def main(opt):
         # Clear stored images
         wandb_img_callback.stored_images = {}
 
-    if opt.wandb:
-        wandb.finish()
+    wandb.finish()
 
     print(f"Your samples are ready and waiting for you here: \n{outpath} \n"
           f" \nEnjoy.")
