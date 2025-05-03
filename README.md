@@ -13,8 +13,10 @@ All our experiments are tracked using [Weights and Biases](https://docs.wandb.ai
    ```sh
    wandb login
    ```
+3. **Choose the amount of logging_steps (Optional)**:
+  By default, the script logs intermediate results at steps [0, 10, 25, -1] (where -1 represents the final step). You can customize these steps using the `--log_steps` argument. Choose steps that give a good representation of the diffusion process - typically including the beginning (0), end (-1), and a few key points in between. For example, `--log_steps 0 5 10 15 20 -1`. Keep in mind that logging too many steps will increase storage usage in Weights & Biases.
 
-3. **Run your experiments**:
+4. **Run your experiments**:
     Now you can run normally your experiments e.g.
     ```sh
     srun --partition=gpu_a100 --gpus=1 --ntasks=1 --cpus-per-task=9 --time=00:20:00 --pty bash -i

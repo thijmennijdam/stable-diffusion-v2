@@ -207,7 +207,7 @@ def parse_args():
         "--log_steps",
         nargs="+",
         type=int,
-        default=[0, 10, 25, 50, -1],  # -1 means final step
+        default=[0, 10, 25, -1],  # -1 means final step
         help="Steps to log intermediate results at"
     )
     opt = parser.parse_args()
