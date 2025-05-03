@@ -208,6 +208,13 @@ def parse_args():
         action='store_true',
         help="log intermediate images to wandb",
     )
+    parser.add_argument(
+        "--log_steps",
+        nargs="+",
+        type=int,
+        default=[0, 10, 25, 50, -1],  # -1 means final step
+        help="Steps to log intermediate results at"
+    )
     opt = parser.parse_args()
     return opt
 
@@ -359,8 +366,53 @@ def main(opt):
         precision_scope(opt.device), \
         model.ema_scope():
             all_samples = list()
+            def wandb_img_callback(pred_x0, i):
+                if not opt.wandb:
+                    return
+                
+                total_steps = opt.steps
+                log_steps = [s if s >= 0 else total_steps-1 for s in opt.log_steps]
+                
+                if i not in log_steps:
+                    return
+                
+                # Get current iteration and batch information from global variables
+                iteration = wandb_img_callback.current_iteration
+                prompt_idx = wandb_img_callback.current_prompt_idx
+                
+                # Initialize storage dict if needed
+                if not hasattr(wandb_img_callback, 'stored_images'):
+                    wandb_img_callback.stored_images = {}
+                
+                # Create a unique key for this batch
+                batch_key = f"iter{iteration}_prompt{prompt_idx}_step{i}"
+                
+                # Convert to image format wandb can handle
+                images = []
+                for sample_idx, x_sample in enumerate(pred_x0):
+                    x_sample = model.decode_first_stage(x_sample.unsqueeze(0))[0]
+                    x_sample = torch.clamp((x_sample + 1.0) / 2.0, min=0.0, max=1.0)
+                    x_sample = 255. * rearrange(x_sample.cpu().numpy(), 'c h w -> h w c')
+                    images.append(wandb.Image(x_sample.astype(np.uint8), 
+                                              caption=f"Iter {iteration}, Prompt {prompt_idx}, Sample {sample_idx}, Step {i}/{total_steps}"))
+                
+                # Store images under a unique key
+                wandb_img_callback.stored_images[batch_key] = {
+                    'images': images,
+                    'step': i,
+                    'iteration': iteration,
+                    'prompt_idx': prompt_idx
+                }
+
+            # Initialize the static variables
+            wandb_img_callback.current_iteration = 0
+            wandb_img_callback.current_prompt_idx = 0
+            wandb_img_callback.stored_images = {}
+
             for n in trange(opt.n_iter, desc="Sampling"):
-                for prompts in tqdm(data, desc="data"):
+                wandb_img_callback.current_iteration = n
+                for prompt_idx, prompts in enumerate(tqdm(data, desc="data")):
+                    wandb_img_callback.current_prompt_idx = prompt_idx
                     uc = None
                     if opt.scale != 1.0:
                         uc = model.get_learned_conditioning(batch_size * [""])
@@ -368,20 +420,6 @@ def main(opt):
                         prompts = list(prompts)
                     c = model.get_learned_conditioning(prompts)
                     shape = [opt.C, opt.H // opt.f, opt.W // opt.f]
-
-                    def wandb_img_callback(pred_x0, i):
-                        if not opt.wandb:
-                            return
-                        
-                        # Convert to image format wandb can handle
-                        images = []
-                        for x_sample in pred_x0:
-                            x_sample = model.decode_first_stage(x_sample.unsqueeze(0))[0]
-                            x_sample = torch.clamp((x_sample + 1.0) / 2.0, min=0.0, max=1.0)
-                            x_sample = 255. * rearrange(x_sample.cpu().numpy(), 'c h w -> h w c')
-                            images.append(wandb.Image(x_sample.astype(np.uint8), caption=f"Step {i}"))
-                        
-                        wandb.log({"intermediate_samples": images}, step=i)
 
                     samples, _ = sampler.sample(S=opt.steps,
                                                      conditioning=c,
@@ -418,6 +456,33 @@ def main(opt):
             grid = put_watermark(grid, wm_encoder)
             grid.save(os.path.join(outpath, f'grid-{grid_count:04}.png'))
             grid_count += 1
+    
+    # After sampling completes
+    if opt.wandb and hasattr(wandb_img_callback, 'stored_images'):
+        # Group by diffusion steps to maintain slider functionality
+        step_to_batch = {}
+        
+        # Organize batches by step
+        for batch_key, batch_data in wandb_img_callback.stored_images.items():
+            step = batch_data['step']
+            if step not in step_to_batch:
+                step_to_batch[step] = []
+            step_to_batch[step].append(batch_data)
+        
+        # Log each step with all its images from different iterations/prompts
+        for step_idx, step in enumerate(sorted(step_to_batch.keys())):
+            all_batches = step_to_batch[step]
+            all_images = []
+            
+            for batch_data in all_batches:
+                all_images.extend(batch_data['images'])
+            
+            wandb.log({
+                "intermediate_samples": all_images,
+            }, step=step_idx)
+        
+        # Clear stored images
+        wandb_img_callback.stored_images = {}
 
     if opt.wandb:
         wandb.finish()
