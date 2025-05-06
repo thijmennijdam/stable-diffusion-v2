@@ -19,6 +19,7 @@ from ldm.util import instantiate_from_config
 from ldm.models.diffusion.ddim import DDIMSampler
 from ldm.models.diffusion.plms import PLMSSampler
 from ldm.models.diffusion.dpm_solver import DPMSolverSampler
+from ldm.modules.encoders.modules import FrozenOpenCLIPImageEmbedder  # OpenCLIP image encoder
 
 load_dotenv()
 
@@ -210,6 +211,18 @@ def parse_args():
         default=[0, 10, 25, -1],  # -1 means final step
         help="Steps to log intermediate results at"
     )
+    parser.add_argument(
+        "--ref-img",
+        type=str,
+        default=None,
+        help="optional reference image encoded with OpenCLIP",
+    )
+    parser.add_argument(
+        "--img-cond-weight",
+        type=float,
+        default=0.25,
+        help="blend factor for reference embedding (0‑1)",
+)
     opt = parser.parse_args()
     return opt
 
@@ -238,6 +251,22 @@ def main(opt):
         sampler = DPMSolverSampler(model, device=device)
     else:
         sampler = DDIMSampler(model, device=device)
+        
+    # ---------- NOTE: reference‑image embedding ----------
+    clip_emb = None
+    if opt.ref_img:
+        clip_encoder = FrozenOpenCLIPImageEmbedder(device=device).to(device).eval()
+        with torch.no_grad():
+            ref = Image.open(opt.ref_img).convert("RGB")
+            w, h = map(lambda x: x - x % 64, ref.size)
+            ref = ref.resize((w, h), resample=Image.LANCZOS)
+            ref = np.asarray(ref).astype(np.float32) / 255.
+            ref = torch.from_numpy(ref[None].transpose(0, 3, 1, 2)).to(device)
+            ref = 2 * ref - 1                      # scale to [-1, 1]
+            clip_emb = clip_encoder(ref)           # shape (1, 1024)
+            clip_emb = clip_emb / clip_emb.norm(dim=-1, keepdim=True)
+        print(f"[CLIP] encoded {opt.ref_img}  →  {clip_emb.shape}")
+    # ---------- reference‑image embedding ----------
 
     os.makedirs(opt.outdir, exist_ok=True)
     outpath = opt.outdir
@@ -410,6 +439,13 @@ def main(opt):
                     if isinstance(prompts, tuple):
                         prompts = list(prompts)
                     c = model.get_learned_conditioning(prompts)
+                    
+                    # ---------- NOTE: fuse reference embedding ----------
+                    if clip_emb is not None:
+                        img_tok = clip_emb.repeat(c.shape[0], 1).unsqueeze(1)  # (B, 1, 1024)
+                        c = c + opt.img_cond_weight * img_tok
+                    # ---------- fuse reference embedding ----------
+                        
                     shape = [opt.C, opt.H // opt.f, opt.W // opt.f]
 
                     samples, _ = sampler.sample(S=opt.steps,
