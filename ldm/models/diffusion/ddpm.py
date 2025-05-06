@@ -794,7 +794,8 @@ class LatentDiffusion(DDPM):
 
     @torch.no_grad()
     def get_input(self, batch, k, return_first_stage_outputs=False, force_c_encode=False,
-                  cond_key=None, return_original_cond=False, bs=None, return_x=False):
+                  cond_key=None, return_original_cond=False, bs=None, return_x=False,
+                  reference_image_key=None):  # Add parameter for reference image
         x = super().get_input(batch, k)
         if bs is not None:
             x = x[:bs]
@@ -824,13 +825,29 @@ class LatentDiffusion(DDPM):
             if bs is not None:
                 c = c[:bs]
             
-            # TODO: double check!
+            # Visual Concept Fusion implementation
             if self.use_image_encodings:
-                # add image encodings using CLIP
-                clip_inputs = self.clip_processor(images=x, return_tensors="pt").to(self.device)
-                clip_features = self.clip_model.get_image_features(**clip_inputs)
-                # concatenate text and img encodings
-                c = torch.cat([c, clip_features], dim=1)
+                # Get reference image if specified, otherwise use input image
+                reference_img = batch.get(reference_image_key, x) if reference_image_key else x
+                reference_img = reference_img.to(self.device)
+                
+                # Extract CLIP image features
+                clip_inputs = self.clip_processor(images=reference_img, return_tensors="pt").to(self.device)
+                image_features = self.clip_model.get_image_features(**clip_inputs)
+                
+                # Project image features to text embedding space
+                projected_img_features = self.image_projection(image_features)
+                
+                # Normalize embeddings
+                c_norm = c / c.norm(dim=-1, keepdim=True)
+                img_norm = projected_img_features / projected_img_features.norm(dim=-1, keepdim=True)
+                
+                # Apply Visual Concept Fusion blending
+                alpha = self.image_blend_weight
+                c = alpha * c_norm + (1 - alpha) * img_norm
+                
+                # Optional: renormalize the combined embedding
+                c = c / c.norm(dim=-1, keepdim=True)
 
             if self.use_positional_encodings:
                 pos_x, pos_y = self.compute_latent_shifts(batch)
