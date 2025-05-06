@@ -219,7 +219,7 @@ def parse_args():
     parser.add_argument(
         "--img-cond-weight",
         type=float,
-        default=0.25,
+        default=0.1,
         help="blend factor for reference embedding (0‑1)",
 )
     opt = parser.parse_args()
@@ -442,7 +442,7 @@ def main(opt):
                     # ---------- NOTE: fuse reference embedding ----------
                     if clip_emb is not None:
                         img_tok = clip_emb.repeat(c.shape[0], 1).unsqueeze(1)  # (B, 1, 1024)
-                        c = c + opt.img_cond_weight * img_tok
+                        c = c * opt.img_cond_weight + (1 - opt.img_cond_weight) * img_token
                     # ---------- fuse reference embedding ----------
                         
                     shape = [opt.C, opt.H // opt.f, opt.W // opt.f]
