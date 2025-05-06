@@ -214,7 +214,6 @@ def parse_args():
     parser.add_argument(
         "--ref-img",
         type=str,
-        default=None,
         help="optional reference image encoded with OpenCLIP",
     )
     parser.add_argument(

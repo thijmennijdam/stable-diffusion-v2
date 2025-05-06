@@ -16,7 +16,7 @@ from pytorch_lightning import seed_everything
 from imwatermark import WatermarkEncoder
 
 
-from scripts.txt2img import put_watermark
+from scripts.txt2img import put_watermark  # if using a package (__init__.py exists)
 from ldm.util import instantiate_from_config
 from ldm.models.diffusion.ddim import DDIMSampler
 from ldm.modules.encoders.modules import FrozenOpenCLIPImageEmbedder  # OpenCLIP image encoder
@@ -185,7 +185,6 @@ def main():
     parser.add_argument(
         "--ref-img",
         type=str,
-        default=None,
         help="optional reference image encoded with OpenCLIP",
     )
     parser.add_argument(
