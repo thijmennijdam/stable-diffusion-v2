@@ -282,13 +282,15 @@ def main(opt):
     if opt.fixed_code:
         start_code = torch.randn([opt.n_samples, opt.C, opt.H // opt.f, opt.W // opt.f], device=device)
 
-    
+
     if opt.reference_img_path:
         reference_img_path = opt.reference_img_path
         if os.path.exists(reference_img_path):
             reference_img = Image.open(reference_img_path).convert("RGB")
-            reference_img = reference_img.resize((224, 224))
-            reference_img = transforms.ToTensor()(reference_img).unsqueeze(0).to(device)            
+            reference_img = reference_img.resize((256, 256))
+            reference_img = transforms.ToTensor()(reference_img).to(device).unsqueeze(0) 
+            # scale to -1 to 1
+            reference_img = (reference_img - 0.5) * 2           
         else:
             print(f"Warning: Reference image not found at {reference_img_path}. Skipping.")
 

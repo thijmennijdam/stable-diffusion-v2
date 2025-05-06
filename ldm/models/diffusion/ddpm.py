@@ -27,7 +27,7 @@ from ldm.modules.distributions.distributions import normal_kl, DiagonalGaussianD
 from ldm.models.autoencoder import IdentityFirstStage, AutoencoderKL
 from ldm.modules.diffusionmodules.util import make_beta_schedule, extract_into_tensor, noise_like
 from ldm.models.diffusion.ddim import DDIMSampler
-
+from ldm.modules.encoders.modules import FrozenOpenCLIPImageEmbedder
 '''
 Added image_blend_weight and clip_model_name as class variables.
 Added a self.image_projection layer to align image features with text embedding space.
@@ -545,7 +545,7 @@ class LatentDiffusion(DDPM):
                  force_null_conditioning=False,
                  use_image_encodings=True,
                  image_blend_weight=0.7,  # Add control for text-image blending
-                 clip_model_name="openai/clip-vit-large-patch14",  # Make CLIP model configurable
+                #  clip_model_name="openai/clip-vit-large-patch14",  # Make CLIP model configurable
                  *args, **kwargs):
         self.force_null_conditioning = force_null_conditioning
         self.num_timesteps_cond = default(num_timesteps_cond, 1)
@@ -597,17 +597,16 @@ class LatentDiffusion(DDPM):
         self.image_blend_weight = image_blend_weight
         
         if self.use_image_encodings:
-            self.clip_model = CLIPModel.from_pretrained(clip_model_name)
-            self.clip_processor = CLIPProcessor.from_pretrained(clip_model_name)
+            self.clip_model = FrozenOpenCLIPImageEmbedder(device=self.device)
             self.clip_model.eval()
-            for param in self.clip_model.parameters():
-                param.requires_grad = False
+            # for param in self.clip_model.parameters():
+            #     param.requires_grad = False
             
             # Add projection layer to align image features with text embedding space
-            self.image_projection = nn.Linear(
-                self.clip_model.config.vision_config.hidden_size,
-                self.clip_model.config.text_config.hidden_size
-            ).to(self.device)
+            # self.image_projection = nn.Linear(
+            #     self.clip_model.config.vision_config.hidden_size,
+            #     self.clip_model.config.text_config.hidden_size
+            # ).to(self.device)
         ################################
 
     def make_cond_schedule(self, ):
@@ -709,8 +708,9 @@ class LatentDiffusion(DDPM):
             
             # Extract CLIP image features
             print("Extracting CLIP image features")
-            clip_inputs = self.clip_processor(images=reference_img, return_tensors="pt").to(self.device)
-            image_features = self.clip_model.get_image_features(**clip_inputs)
+            # clip_inputs = self.clip_processor(images=reference_img.cpu(), return_tensors="pt").to(self.device)
+            # image_features = self.clip_model.get_image_features(**clip_inputs)
+            image_features = self.clip_model(reference_img)
             
             # TODO: maybe add later
             # Project image features to text embedding space
@@ -719,6 +719,9 @@ class LatentDiffusion(DDPM):
             # Normalize embeddings
             c_norm = c / c.norm(dim=-1, keepdim=True)
             img_norm = image_features / image_features.norm(dim=-1, keepdim=True)
+
+            # print shapes
+            print(f"c shape: {c.shape}, img shape: {image_features.shape}")
             
             # Apply Visual Concept Fusion blending
             alpha = self.image_blend_weight
