@@ -690,7 +690,7 @@ class LatentDiffusion(DDPM):
             raise NotImplementedError(f"encoder_posterior of type '{type(encoder_posterior)}' not yet implemented")
         return self.scale_factor * z
 
-    def get_learned_conditioning(self, c, reference_img):
+    def get_learned_conditioning(self, c, reference_img=None):
         if self.cond_stage_forward is None:
             if hasattr(self.cond_stage_model, 'encode') and callable(self.cond_stage_model.encode):
                 c = self.cond_stage_model.encode(c)
@@ -703,7 +703,7 @@ class LatentDiffusion(DDPM):
             c = getattr(self.cond_stage_model, self.cond_stage_forward)(c)
         
         # Visual Concept Fusion implementation
-        if self.use_image_encodings:
+        if self.use_image_encodings and reference_img is not None:
             print("Using Visual Concept Fusion with CLIP image features")
             reference_img = reference_img.to(self.device)
             
