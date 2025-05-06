@@ -19,6 +19,7 @@ from ldm.util import instantiate_from_config
 from ldm.models.diffusion.ddim import DDIMSampler
 from ldm.models.diffusion.plms import PLMSSampler
 from ldm.models.diffusion.dpm_solver import DPMSolverSampler
+from torchvision import transforms
 
 load_dotenv()
 
@@ -281,25 +282,16 @@ def main(opt):
     if opt.fixed_code:
         start_code = torch.randn([opt.n_samples, opt.C, opt.H // opt.f, opt.W // opt.f], device=device)
 
-    reference_img = None
     
-    if opt.reference_img:
-        reference_img_path = opt.reference_img
+    if opt.reference_img_path:
+        reference_img_path = opt.reference_img_path
         if os.path.exists(reference_img_path):
             reference_img = Image.open(reference_img_path).convert("RGB")
             reference_img = reference_img.resize((224, 224))
-            reference_img = transforms.ToTensor()(reference_img).unsqueeze(0).to(device)
+            reference_img = transforms.ToTensor()(reference_img).unsqueeze(0).to(device)            
         else:
             print(f"Warning: Reference image not found at {reference_img_path}. Skipping.")
 
-    # Pass the reference image to the model if available
-    if reference_img is not None:
-        print("Incorporating reference image into the model's encodings...")
-        reference_encoding = model.get_learned_conditioning(reference_img)
-        # Use reference_encoding as needed in the sampling process
-    else:
-        reference_encoding = None
-        
     
     if opt.torchscript or opt.ipex:
         transformer = model.cond_stage_model.model
@@ -360,7 +352,7 @@ def main(opt):
 
         with torch.no_grad(), additional_context:
             for _ in range(3):
-                c = model.get_learned_conditioning(prompts)
+                c = model.get_learned_conditioning(prompts, reference_img=reference_img)
             samples_ddim, _ = sampler.sample(S=5,
                                              conditioning=c,
                                              batch_size=batch_size,

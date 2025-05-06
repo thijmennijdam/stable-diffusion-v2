@@ -5,7 +5,7 @@
 Start an interactive GPU session:
 
 ```bash
-srun --partition=gpu_a100 --gpus=1 --ntasks=1 --cpus-per-task=9 --time=00:20:00 --pty bash -i
+srun --partition=gpu_h100 --gpus=1 --ntasks=1 --cpus-per-task=9 --time=00:30:00 --pty bash -i
 ```
 
 Then:

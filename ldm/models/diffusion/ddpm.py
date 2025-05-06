@@ -704,9 +704,11 @@ class LatentDiffusion(DDPM):
         
         # Visual Concept Fusion implementation
         if self.use_image_encodings:
+            print("Using Visual Concept Fusion with CLIP image features")
             reference_img = reference_img.to(self.device)
             
             # Extract CLIP image features
+            print("Extracting CLIP image features")
             clip_inputs = self.clip_processor(images=reference_img, return_tensors="pt").to(self.device)
             image_features = self.clip_model.get_image_features(**clip_inputs)
             
@@ -724,7 +726,7 @@ class LatentDiffusion(DDPM):
             
             # Optional: renormalize the combined embedding
             c = c / c.norm(dim=-1, keepdim=True)            
-        
+            print("CLIP image features extracted and blended with text features")
         return c
     
 
