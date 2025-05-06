@@ -543,7 +543,7 @@ class LatentDiffusion(DDPM):
                  scale_factor=1.0,
                  scale_by_std=False,
                  force_null_conditioning=False,
-                 use_image_encodings=False,
+                 use_image_encodings=True,
                  image_blend_weight=0.7,  # Add control for text-image blending
                  clip_model_name="openai/clip-vit-large-patch14",  # Make CLIP model configurable
                  *args, **kwargs):
@@ -690,7 +690,7 @@ class LatentDiffusion(DDPM):
             raise NotImplementedError(f"encoder_posterior of type '{type(encoder_posterior)}' not yet implemented")
         return self.scale_factor * z
 
-    def get_learned_conditioning(self, c):
+    def get_learned_conditioning(self, c, reference_img):
         if self.cond_stage_forward is None:
             if hasattr(self.cond_stage_model, 'encode') and callable(self.cond_stage_model.encode):
                 c = self.cond_stage_model.encode(c)
@@ -701,7 +701,32 @@ class LatentDiffusion(DDPM):
         else:
             assert hasattr(self.cond_stage_model, self.cond_stage_forward)
             c = getattr(self.cond_stage_model, self.cond_stage_forward)(c)
+        
+        # Visual Concept Fusion implementation
+        if self.use_image_encodings:
+            reference_img = reference_img.to(self.device)
+            
+            # Extract CLIP image features
+            clip_inputs = self.clip_processor(images=reference_img, return_tensors="pt").to(self.device)
+            image_features = self.clip_model.get_image_features(**clip_inputs)
+            
+            # TODO: maybe add later
+            # Project image features to text embedding space
+            # projected_img_features = self.image_projection(image_features)
+            
+            # Normalize embeddings
+            c_norm = c / c.norm(dim=-1, keepdim=True)
+            img_norm = image_features / image_features.norm(dim=-1, keepdim=True)
+            
+            # Apply Visual Concept Fusion blending
+            alpha = self.image_blend_weight
+            c = alpha * c_norm + (1 - alpha) * img_norm
+            
+            # Optional: renormalize the combined embedding
+            c = c / c.norm(dim=-1, keepdim=True)            
+        
         return c
+    
 
     def meshgrid(self, h, w):
         y = torch.arange(0, h).view(h, 1, 1).repeat(1, w, 1)
@@ -794,8 +819,7 @@ class LatentDiffusion(DDPM):
 
     @torch.no_grad()
     def get_input(self, batch, k, return_first_stage_outputs=False, force_c_encode=False,
-                  cond_key=None, return_original_cond=False, bs=None, return_x=False,
-                  reference_image_key=None):  # Add parameter for reference image
+                  cond_key=None, return_original_cond=False, bs=None, return_x=False):  # Add parameter for reference image
         x = super().get_input(batch, k)
         if bs is not None:
             x = x[:bs]
@@ -824,30 +848,6 @@ class LatentDiffusion(DDPM):
                 c = xc
             if bs is not None:
                 c = c[:bs]
-            
-            # Visual Concept Fusion implementation
-            if self.use_image_encodings:
-                # Get reference image if specified, otherwise use input image
-                reference_img = batch.get(reference_image_key, x) if reference_image_key else x
-                reference_img = reference_img.to(self.device)
-                
-                # Extract CLIP image features
-                clip_inputs = self.clip_processor(images=reference_img, return_tensors="pt").to(self.device)
-                image_features = self.clip_model.get_image_features(**clip_inputs)
-                
-                # Project image features to text embedding space
-                projected_img_features = self.image_projection(image_features)
-                
-                # Normalize embeddings
-                c_norm = c / c.norm(dim=-1, keepdim=True)
-                img_norm = projected_img_features / projected_img_features.norm(dim=-1, keepdim=True)
-                
-                # Apply Visual Concept Fusion blending
-                alpha = self.image_blend_weight
-                c = alpha * c_norm + (1 - alpha) * img_norm
-                
-                # Optional: renormalize the combined embedding
-                c = c / c.norm(dim=-1, keepdim=True)
 
             if self.use_positional_encodings:
                 pos_x, pos_y = self.compute_latent_shifts(batch)

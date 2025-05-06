@@ -210,6 +210,12 @@ def parse_args():
         default=[0, 10, 25, -1],  # -1 means final step
         help="Steps to log intermediate results at"
     )
+    parser.add_argument(
+        "--reference_img_path",
+        type=str,
+        default=None,
+        help="Path to reference image"
+    )
     opt = parser.parse_args()
     return opt
 
@@ -229,6 +235,7 @@ def main(opt):
     opt.wandb_entity = os.getenv("WANDB_ENTITY", "FoMo-2025")
 
     config = OmegaConf.load(f"{opt.config}")
+    
     device = torch.device("cuda") if opt.device == "cuda" else torch.device("cpu")
     model = load_model_from_config(config, f"{opt.ckpt}", device)
 
@@ -274,6 +281,26 @@ def main(opt):
     if opt.fixed_code:
         start_code = torch.randn([opt.n_samples, opt.C, opt.H // opt.f, opt.W // opt.f], device=device)
 
+    reference_img = None
+    
+    if opt.reference_img:
+        reference_img_path = opt.reference_img
+        if os.path.exists(reference_img_path):
+            reference_img = Image.open(reference_img_path).convert("RGB")
+            reference_img = reference_img.resize((224, 224))
+            reference_img = transforms.ToTensor()(reference_img).unsqueeze(0).to(device)
+        else:
+            print(f"Warning: Reference image not found at {reference_img_path}. Skipping.")
+
+    # Pass the reference image to the model if available
+    if reference_img is not None:
+        print("Incorporating reference image into the model's encodings...")
+        reference_encoding = model.get_learned_conditioning(reference_img)
+        # Use reference_encoding as needed in the sampling process
+    else:
+        reference_encoding = None
+        
+    
     if opt.torchscript or opt.ipex:
         transformer = model.cond_stage_model.model
         unet = model.model.diffusion_model
