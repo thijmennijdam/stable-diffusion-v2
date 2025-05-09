@@ -299,7 +299,6 @@ def main(opt):
     if opt.ref_img:
         if os.path.exists(opt.ref_img):
             ref_image = Image.open(opt.ref_img).convert("RGB")
-            ref_image = ref_image.resize((256, 256))
             ref_image = transforms.ToTensor()(ref_image).to(device).unsqueeze(0) 
             # scale to -1 to 1
             ref_image = (ref_image - 0.5) * 2           

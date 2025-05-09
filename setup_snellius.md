@@ -61,7 +61,8 @@ uv run python scripts/txt2img.py \
   --prompt "a professional photograph of an astronaut riding a horse" \
   --ckpt /scratch-shared/holy-triangle/weights/stable-diffusion-2-1/v2-1_768-ema-pruned.ckpt \
   --config configs/stable-diffusion/v2-inference-v.yaml \
-  --H 768 --W 768
+  --H 768 --W 768 \
+  --ref_img "data/picasso_style.jpg"
 ```
 
 ---
@@ -90,5 +91,6 @@ python scripts/txt2img.py \
   --prompt "a professional photograph of an astronaut riding a horse" \
   --ckpt weights/stable-diffusion-2-1/v2-1_768-ema-pruned.ckpt \
   --config configs/stable-diffusion/v2-inference-v.yaml \
-  --H 768 --W 768
+  --H 768 --W 768 \
+  --ref_img "data/picasso_style.jpg"
 ```

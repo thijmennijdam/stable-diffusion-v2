@@ -596,23 +596,19 @@ class LatentDiffusion(DDPM):
         self.use_ref_img = use_ref_img
         self.ref_blend_weight = ref_blend_weight
 
+        # if self.use_ref_img:
+        self.create_ref_img_encoder()
+
+
     def create_ref_img_encoder(self):
-        
         
         # Instantiate CLIP model
         if self.use_ref_img:
             print("Using CLIP model for reference image encoding.")
             self.clip_model = FrozenOpenCLIPImageEmbedder(device=self.device)
+            self.clip_model = self.clip_model.to(self.device).half()
             self.clip_model.eval()
-            # for param in self.clip_model.parameters():
-            #     param.requires_grad = False
-            
-            # Add projection layer to align image features with text embedding space
-            # self.image_projection = nn.Linear(
-            #     self.clip_model.config.vision_config.hidden_size,
-            #     self.clip_model.config.text_config.hidden_size
-            # ).to(self.device)
-        ################################
+
 
     def make_cond_schedule(self, ):
         self.cond_ids = torch.full(size=(self.num_timesteps,), fill_value=self.num_timesteps - 1, dtype=torch.long)
@@ -708,7 +704,7 @@ class LatentDiffusion(DDPM):
             
         ## --------- Visual Concept Fusion implementation --------- ##
         if self.use_ref_img and ref_image is not None:
-            ref_image = ref_image.to(self.device)
+            ref_image = ref_image.to(self.device)#.float()
 
             # Extract and normalize CLIP image features
             image_features = self.clip_model(ref_image)
