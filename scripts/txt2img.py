@@ -212,7 +212,7 @@ def parse_args():
         help="Steps to log intermediate results at"
     )
     parser.add_argument(
-        "--reference_img_path",
+        "--ref_img",
         type=str,
         default=None,
         help="Path to reference image"
@@ -283,16 +283,15 @@ def main(opt):
         start_code = torch.randn([opt.n_samples, opt.C, opt.H // opt.f, opt.W // opt.f], device=device)
 
 
-    if opt.reference_img_path:
-        reference_img_path = opt.reference_img_path
-        if os.path.exists(reference_img_path):
-            reference_img = Image.open(reference_img_path).convert("RGB")
-            reference_img = reference_img.resize((256, 256))
-            reference_img = transforms.ToTensor()(reference_img).to(device).unsqueeze(0) 
+    if opt.ref_img:
+        if os.path.exists(opt.ref_img):
+            ref_image = Image.open(opt.ref_img).convert("RGB")
+            ref_image = ref_image.resize((256, 256))
+            ref_image = transforms.ToTensor()(ref_image).to(device).unsqueeze(0) 
             # scale to -1 to 1
-            reference_img = (reference_img - 0.5) * 2           
+            ref_image = (ref_image - 0.5) * 2           
         else:
-            print(f"Warning: Reference image not found at {reference_img_path}. Skipping.")
+            print(f"Warning: Reference image not found at {opt.ref_img}. Skipping.")
 
     
     if opt.torchscript or opt.ipex:
@@ -354,7 +353,7 @@ def main(opt):
 
         with torch.no_grad(), additional_context:
             for _ in range(3):
-                c = model.get_learned_conditioning(prompts, reference_img=reference_img)
+                c = model.get_learned_conditioning(prompts, ref_image=ref_image)
             samples_ddim, _ = sampler.sample(S=5,
                                              conditioning=c,
                                              batch_size=batch_size,
@@ -430,7 +429,7 @@ def main(opt):
                         uc = model.get_learned_conditioning(batch_size * [""])
                     if isinstance(prompts, tuple):
                         prompts = list(prompts)
-                    c = model.get_learned_conditioning(prompts, reference_img=reference_img)
+                    c = model.get_learned_conditioning(prompts, ref_image=ref_image)
                     shape = [opt.C, opt.H // opt.f, opt.W // opt.f]
 
                     samples, _ = sampler.sample(S=opt.steps,

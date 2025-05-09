@@ -689,7 +689,7 @@ class LatentDiffusion(DDPM):
             raise NotImplementedError(f"encoder_posterior of type '{type(encoder_posterior)}' not yet implemented")
         return self.scale_factor * z
 
-    def get_learned_conditioning(self, c, reference_img=None):
+    def get_learned_conditioning(self, c, ref_image=None):
         if self.cond_stage_forward is None:
             if hasattr(self.cond_stage_model, 'encode') and callable(self.cond_stage_model.encode):
                 c = self.cond_stage_model.encode(c)
@@ -702,15 +702,15 @@ class LatentDiffusion(DDPM):
             c = getattr(self.cond_stage_model, self.cond_stage_forward)(c)
         
         # Visual Concept Fusion implementation
-        if self.use_image_encodings and reference_img is not None:
+        if self.use_image_encodings and ref_image is not None:
             print("Using Visual Concept Fusion with CLIP image features")
-            reference_img = reference_img.to(self.device)
+            ref_image = ref_image.to(self.device)
             
             # Extract CLIP image features
             print("Extracting CLIP image features")
-            # clip_inputs = self.clip_processor(images=reference_img.cpu(), return_tensors="pt").to(self.device)
+            # clip_inputs = self.clip_processor(images=ref_image.cpu(), return_tensors="pt").to(self.device)
             # image_features = self.clip_model.get_image_features(**clip_inputs)
-            image_features = self.clip_model(reference_img)
+            image_features = self.clip_model(ref_image)
             
             # TODO: maybe add later
             # Project image features to text embedding space
@@ -1166,14 +1166,14 @@ class LatentDiffusion(DDPM):
                                   mask=mask, x0=x0)
 
     @torch.no_grad()
-    def sample_log(self, cond, batch_size, ddim, ddim_steps, reference_image=None, **kwargs):
+    def sample_log(self, cond, batch_size, ddim, ddim_steps, ref_image=None, **kwargs):
         if ddim:
             ddim_sampler = DDIMSampler(self)
             shape = (self.channels, self.image_size, self.image_size)
             
-            if reference_image is not None and self.use_image_encodings:
+            if ref_image is not None and self.use_image_encodings:
                 # Get image conditioning
-                img_cond = self.get_image_conditioning(reference_image)
+                img_cond = self.get_image_conditioning(ref_image)
                 
                 # Apply VCF blending if using cross-attention conditioning
                 if isinstance(cond, dict) and "c_crossattn" in cond:
