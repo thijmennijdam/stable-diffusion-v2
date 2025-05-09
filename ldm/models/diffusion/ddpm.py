@@ -29,7 +29,7 @@ from ldm.modules.diffusionmodules.util import make_beta_schedule, extract_into_t
 from ldm.models.diffusion.ddim import DDIMSampler
 from ldm.modules.encoders.modules import FrozenOpenCLIPImageEmbedder
 '''
-Added image_blend_weight and clip_model_name as class variables.
+Added ref_blend_weight and clip_model_name as class variables.
 Added a self.image_projection layer to align image features with text embedding space.
 
 Updated sample_log to use the new image_projection layer. If there's a reference image, it processes it for VCF and applies VCF blending
@@ -543,8 +543,8 @@ class LatentDiffusion(DDPM):
                  scale_factor=1.0,
                  scale_by_std=False,
                  force_null_conditioning=False,
-                 use_image_encodings=True,
-                 image_blend_weight=0.7,  # Add control for text-image blending
+                 use_ref_img=False,
+                 ref_blend_weight=0.7,  # Add control for text-image blending
                 #  clip_model_name="openai/clip-vit-large-patch14",  # Make CLIP model configurable
                  *args, **kwargs):
         self.force_null_conditioning = force_null_conditioning
@@ -593,10 +593,11 @@ class LatentDiffusion(DDPM):
             self.model_ema.reset_num_updates()
 
         ################################
-        self.use_image_encodings = use_image_encodings
-        self.image_blend_weight = image_blend_weight
+        self.use_ref_img = use_ref_img
+        self.ref_blend_weight = ref_blend_weight
         
-        if self.use_image_encodings:
+        # Instantiate CLIP model
+        if self.use_ref_img:
             self.clip_model = FrozenOpenCLIPImageEmbedder(device=self.device)
             self.clip_model.eval()
             # for param in self.clip_model.parameters():
@@ -700,36 +701,26 @@ class LatentDiffusion(DDPM):
         else:
             assert hasattr(self.cond_stage_model, self.cond_stage_forward)
             c = getattr(self.cond_stage_model, self.cond_stage_forward)(c)
-        
-        # Visual Concept Fusion implementation
-        if self.use_image_encodings and ref_image is not None:
-            print("Using Visual Concept Fusion with CLIP image features")
+            
+        ## --------- Visual Concept Fusion implementation --------- ##
+        if self.use_ref_img and ref_image is not None:
             ref_image = ref_image.to(self.device)
-            
-            # Extract CLIP image features
-            print("Extracting CLIP image features")
-            # clip_inputs = self.clip_processor(images=ref_image.cpu(), return_tensors="pt").to(self.device)
-            # image_features = self.clip_model.get_image_features(**clip_inputs)
-            image_features = self.clip_model(ref_image)
-            
-            # TODO: maybe add later
-            # Project image features to text embedding space
-            # projected_img_features = self.image_projection(image_features)
-            
-            # Normalize embeddings
-            c_norm = c / c.norm(dim=-1, keepdim=True)
-            img_norm = image_features / image_features.norm(dim=-1, keepdim=True)
 
-            # print shapes
-            print(f"c shape: {c.shape}, img shape: {image_features.shape}")
-            
-            # Apply Visual Concept Fusion blending
-            alpha = self.image_blend_weight
-            c = alpha * c_norm + (1 - alpha) * img_norm
-            
-            # Optional: renormalize the combined embedding
-            c = c / c.norm(dim=-1, keepdim=True)            
-            print("CLIP image features extracted and blended with text features")
+            # Extract and normalize CLIP image features
+            image_features = self.clip_model(ref_image)
+            image_features = image_features / image_features.norm(dim=-1, keepdim=True)
+
+            # Normalize text features
+            c = c / c.norm(dim=-1, keepdim=True)
+
+            # Blend text and image features
+            alpha = self.ref_blend_weight
+            c = alpha * c + (1 - alpha) * image_features
+
+            # Renormalize the combined features
+            c = c / c.norm(dim=-1, keepdim=True)
+        ## --------- End of Visual Concept Fusion implementation --------- ##
+        
         return c
     
 
@@ -1171,7 +1162,7 @@ class LatentDiffusion(DDPM):
             ddim_sampler = DDIMSampler(self)
             shape = (self.channels, self.image_size, self.image_size)
             
-            if ref_image is not None and self.use_image_encodings:
+            if ref_image is not None and self.use_ref_img:
                 # Get image conditioning
                 img_cond = self.get_image_conditioning(ref_image)
                 
@@ -1181,7 +1172,7 @@ class LatentDiffusion(DDPM):
                     text_cond = text_cond / text_cond.norm(dim=-1, keepdim=True)
                     
                     # Blend text and image conditioning
-                    alpha = self.image_blend_weight
+                    alpha = self.ref_blend_weight
                     hybrid_cond = alpha * text_cond + (1 - alpha) * img_cond
                     hybrid_cond = hybrid_cond / hybrid_cond.norm(dim=-1, keepdim=True)
                     
@@ -1392,7 +1383,7 @@ class LatentDiffusion(DDPM):
                            0.0 = full image influence
         """
         assert 0.0 <= weight <= 1.0, "Blend weight must be between 0.0 and 1.0"
-        self.image_blend_weight = weight
+        self.ref_blend_weight = weight
 
     @torch.no_grad()
     def get_image_conditioning(self, image):
@@ -1404,7 +1395,7 @@ class LatentDiffusion(DDPM):
         Returns:
             torch.Tensor: Projected image features
         """
-        if not self.use_image_encodings:
+        if not self.use_ref_img:
             raise ValueError("Image encodings not enabled")
             
         clip_inputs = self.clip_processor(images=image, return_tensors="pt").to(self.device)

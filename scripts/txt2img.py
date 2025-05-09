@@ -217,6 +217,13 @@ def parse_args():
         default=None,
         help="Path to reference image"
     )
+    parser.add_argument(
+        "--ref_blend_weight",
+        type=float,
+        default=0.8,
+        help="Blend weight for reference image. 1.0 corresponds to full destruction of information in init image. Used to balance the influence of the reference image and the prompt.",
+    )
+    
     opt = parser.parse_args()
     return opt
 
