@@ -249,9 +249,7 @@ def main(opt):
     
     # Set the blend weight for the reference image
     if opt.ref_img:
-        model.ref_blend_weight = opt.ref_blend_weight
-    else:
-        model.ref_blend_weight = 0.0
+        model.set_blend_weight(opt.ref_blend_weight)
 
     if opt.plms:
         sampler = PLMSSampler(model, device=device)
