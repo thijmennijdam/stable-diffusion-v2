@@ -19,6 +19,7 @@ from ldm.util import instantiate_from_config
 from ldm.models.diffusion.ddim import DDIMSampler
 from ldm.models.diffusion.plms import PLMSSampler
 from ldm.models.diffusion.dpm_solver import DPMSolverSampler
+from torchvision import transforms
 
 load_dotenv()
 
@@ -210,6 +211,19 @@ def parse_args():
         default=[0, 10, 25, -1],  # -1 means final step
         help="Steps to log intermediate results at"
     )
+    parser.add_argument(
+        "--ref_img",
+        type=str,
+        default=None,
+        help="Path to reference image"
+    )
+    parser.add_argument(
+        "--ref_blend_weight",
+        type=float,
+        default=0.8,
+        help="Blend weight for reference image. 1.0 corresponds to full destruction of information in init image. Used to balance the influence of the reference image and the prompt.",
+    )
+    
     opt = parser.parse_args()
     return opt
 
@@ -229,8 +243,15 @@ def main(opt):
     opt.wandb_entity = os.getenv("WANDB_ENTITY", "FoMo-2025")
 
     config = OmegaConf.load(f"{opt.config}")
+    
     device = torch.device("cuda") if opt.device == "cuda" else torch.device("cpu")
     model = load_model_from_config(config, f"{opt.ckpt}", device)
+    
+    # Set the blend weight for the reference image
+    if opt.ref_img:
+        model.set_blend_weight(opt.ref_blend_weight)
+        model.set_use_ref_img(True)
+        model.create_ref_img_encoder()
 
     if opt.plms:
         sampler = PLMSSampler(model, device=device)
@@ -274,6 +295,17 @@ def main(opt):
     if opt.fixed_code:
         start_code = torch.randn([opt.n_samples, opt.C, opt.H // opt.f, opt.W // opt.f], device=device)
 
+
+    if opt.ref_img:
+        if os.path.exists(opt.ref_img):
+            ref_image = Image.open(opt.ref_img).convert("RGB")
+            ref_image = transforms.ToTensor()(ref_image).to(device).unsqueeze(0) 
+            # scale to -1 to 1
+            ref_image = (ref_image - 0.5) * 2           
+        else:
+            print(f"Warning: Reference image not found at {opt.ref_img}. Skipping.")
+
+    
     if opt.torchscript or opt.ipex:
         transformer = model.cond_stage_model.model
         unet = model.model.diffusion_model
@@ -333,7 +365,7 @@ def main(opt):
 
         with torch.no_grad(), additional_context:
             for _ in range(3):
-                c = model.get_learned_conditioning(prompts)
+                c = model.get_learned_conditioning(prompts, ref_image=ref_image)
             samples_ddim, _ = sampler.sample(S=5,
                                              conditioning=c,
                                              batch_size=batch_size,
@@ -409,7 +441,7 @@ def main(opt):
                         uc = model.get_learned_conditioning(batch_size * [""])
                     if isinstance(prompts, tuple):
                         prompts = list(prompts)
-                    c = model.get_learned_conditioning(prompts)
+                    c = model.get_learned_conditioning(prompts, ref_image=ref_image)
                     shape = [opt.C, opt.H // opt.f, opt.W // opt.f]
 
                     samples, _ = sampler.sample(S=opt.steps,
