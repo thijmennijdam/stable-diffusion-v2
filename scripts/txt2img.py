@@ -246,6 +246,12 @@ def main(opt):
     
     device = torch.device("cuda") if opt.device == "cuda" else torch.device("cpu")
     model = load_model_from_config(config, f"{opt.ckpt}", device)
+    
+    # Set the blend weight for the reference image
+    if opt.ref_img:
+        model.ref_blend_weight = opt.ref_blend_weight
+    else:
+        model.ref_blend_weight = 0.0
 
     if opt.plms:
         sampler = PLMSSampler(model, device=device)
