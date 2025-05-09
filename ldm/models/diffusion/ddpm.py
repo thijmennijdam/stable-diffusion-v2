@@ -591,13 +591,17 @@ class LatentDiffusion(DDPM):
             print(" +++++++++++ WARNING: RESETTING NUM_EMA UPDATES TO ZERO +++++++++++ ")
             assert self.use_ema
             self.model_ema.reset_num_updates()
-
+            
         ################################
         self.use_ref_img = use_ref_img
         self.ref_blend_weight = ref_blend_weight
+
+    def create_ref_img_encoder(self):
+        
         
         # Instantiate CLIP model
         if self.use_ref_img:
+            print("Using CLIP model for reference image encoding.")
             self.clip_model = FrozenOpenCLIPImageEmbedder(device=self.device)
             self.clip_model.eval()
             # for param in self.clip_model.parameters():
@@ -1384,6 +1388,15 @@ class LatentDiffusion(DDPM):
         """
         assert 0.0 <= weight <= 1.0, "Blend weight must be between 0.0 and 1.0"
         self.ref_blend_weight = weight
+        
+    def set_use_ref_img(self, use_ref_img: bool):
+        """
+        Enable or disable the use of reference images for conditioning.
+        
+        Args:
+            use_ref_img (bool): If True, use reference images for conditioning.
+        """
+        self.use_ref_img = use_ref_img
 
     @torch.no_grad()
     def get_image_conditioning(self, image):
