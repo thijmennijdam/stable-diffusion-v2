@@ -27,7 +27,16 @@ from ldm.modules.distributions.distributions import normal_kl, DiagonalGaussianD
 from ldm.models.autoencoder import IdentityFirstStage, AutoencoderKL
 from ldm.modules.diffusionmodules.util import make_beta_schedule, extract_into_tensor, noise_like
 from ldm.models.diffusion.ddim import DDIMSampler
+from ldm.modules.encoders.modules import FrozenOpenCLIPImageEmbedder
+'''
+Added ref_blend_weight and clip_model_name as class variables.
+Added a self.image_projection layer to align image features with text embedding space.
 
+Updated sample_log to use the new image_projection layer. If there's a reference image, it processes it for VCF and applies VCF blending
+
+Added function set_blend_weight to set the blending weight for Visual Concept Fusion.
+Added function get_image_conditioning to get the image conditioning for Visual Concept Fusion.
+'''
 
 __conditioning_keys__ = {'concat': 'c_concat',
                          'crossattn': 'c_crossattn',
@@ -534,7 +543,9 @@ class LatentDiffusion(DDPM):
                  scale_factor=1.0,
                  scale_by_std=False,
                  force_null_conditioning=False,
-                 use_image_encodings=False,
+                 use_ref_img=False,
+                 ref_blend_weight=0.7,  # Add control for text-image blending
+                #  clip_model_name="openai/clip-vit-large-patch14",  # Make CLIP model configurable
                  *args, **kwargs):
         self.force_null_conditioning = force_null_conditioning
         self.num_timesteps_cond = default(num_timesteps_cond, 1)
@@ -580,18 +591,24 @@ class LatentDiffusion(DDPM):
             print(" +++++++++++ WARNING: RESETTING NUM_EMA UPDATES TO ZERO +++++++++++ ")
             assert self.use_ema
             self.model_ema.reset_num_updates()
+            
+        ################################
+        self.use_ref_img = use_ref_img
+        self.ref_blend_weight = ref_blend_weight
 
-        ################################
-        self.use_image_encodings = use_image_encodings
-        # TODO: allow for different img encoders (?) 
-        # Use CLIP as the default image encoder
-        if self.use_image_encodings:
-            self.clip_model = CLIPModel.from_pretrained("openai/clip-vit-large-patch14")
-            self.clip_processor = CLIPProcessor.from_pretrained("openai/clip-vit-large-patch14")
+        # if self.use_ref_img:
+        self.create_ref_img_encoder()
+
+
+    def create_ref_img_encoder(self):
+        
+        # Instantiate CLIP model
+        if self.use_ref_img:
+            print("Using CLIP model for reference image encoding.")
+            self.clip_model = FrozenOpenCLIPImageEmbedder(device=self.device)
+            self.clip_model = self.clip_model.to(self.device).half()
             self.clip_model.eval()
-            for param in self.clip_model.parameters():
-                param.requires_grad = False
-        ################################
+
 
     def make_cond_schedule(self, ):
         self.cond_ids = torch.full(size=(self.num_timesteps,), fill_value=self.num_timesteps - 1, dtype=torch.long)
@@ -673,7 +690,7 @@ class LatentDiffusion(DDPM):
             raise NotImplementedError(f"encoder_posterior of type '{type(encoder_posterior)}' not yet implemented")
         return self.scale_factor * z
 
-    def get_learned_conditioning(self, c):
+    def get_learned_conditioning(self, c, ref_image=None):
         if self.cond_stage_forward is None:
             if hasattr(self.cond_stage_model, 'encode') and callable(self.cond_stage_model.encode):
                 c = self.cond_stage_model.encode(c)
@@ -684,7 +701,28 @@ class LatentDiffusion(DDPM):
         else:
             assert hasattr(self.cond_stage_model, self.cond_stage_forward)
             c = getattr(self.cond_stage_model, self.cond_stage_forward)(c)
+            
+        ## --------- Visual Concept Fusion implementation --------- ##
+        if self.use_ref_img and ref_image is not None:
+            ref_image = ref_image.to(self.device)#.float()
+
+            # Extract and normalize CLIP image features
+            image_features = self.clip_model(ref_image)
+            image_features = image_features / image_features.norm(dim=-1, keepdim=True)
+
+            # Normalize text features
+            c = c / c.norm(dim=-1, keepdim=True)
+
+            # Blend text and image features
+            alpha = self.ref_blend_weight
+            c = alpha * c + (1 - alpha) * image_features
+
+            # Renormalize the combined features
+            c = c / c.norm(dim=-1, keepdim=True)
+        ## --------- End of Visual Concept Fusion implementation --------- ##
+        
         return c
+    
 
     def meshgrid(self, h, w):
         y = torch.arange(0, h).view(h, 1, 1).repeat(1, w, 1)
@@ -777,7 +815,7 @@ class LatentDiffusion(DDPM):
 
     @torch.no_grad()
     def get_input(self, batch, k, return_first_stage_outputs=False, force_c_encode=False,
-                  cond_key=None, return_original_cond=False, bs=None, return_x=False):
+                  cond_key=None, return_original_cond=False, bs=None, return_x=False):  # Add parameter for reference image
         x = super().get_input(batch, k)
         if bs is not None:
             x = x[:bs]
@@ -806,14 +844,6 @@ class LatentDiffusion(DDPM):
                 c = xc
             if bs is not None:
                 c = c[:bs]
-            
-            # TODO: double check!
-            if self.use_image_encodings:
-                # add image encodings using CLIP
-                clip_inputs = self.clip_processor(images=x, return_tensors="pt").to(self.device)
-                clip_features = self.clip_model.get_image_features(**clip_inputs)
-                # concatenate text and img encodings
-                c = torch.cat([c, clip_features], dim=1)
 
             if self.use_positional_encodings:
                 pos_x, pos_y = self.compute_latent_shifts(batch)
@@ -1127,17 +1157,32 @@ class LatentDiffusion(DDPM):
                                   mask=mask, x0=x0)
 
     @torch.no_grad()
-    def sample_log(self, cond, batch_size, ddim, ddim_steps, **kwargs):
+    def sample_log(self, cond, batch_size, ddim, ddim_steps, ref_image=None, **kwargs):
         if ddim:
             ddim_sampler = DDIMSampler(self)
             shape = (self.channels, self.image_size, self.image_size)
+            
+            if ref_image is not None and self.use_ref_img:
+                # Get image conditioning
+                img_cond = self.get_image_conditioning(ref_image)
+                
+                # Apply VCF blending if using cross-attention conditioning
+                if isinstance(cond, dict) and "c_crossattn" in cond:
+                    text_cond = cond["c_crossattn"][0]
+                    text_cond = text_cond / text_cond.norm(dim=-1, keepdim=True)
+                    
+                    # Blend text and image conditioning
+                    alpha = self.ref_blend_weight
+                    hybrid_cond = alpha * text_cond + (1 - alpha) * img_cond
+                    hybrid_cond = hybrid_cond / hybrid_cond.norm(dim=-1, keepdim=True)
+                    
+                    cond["c_crossattn"][0] = hybrid_cond
+            
             samples, intermediates = ddim_sampler.sample(ddim_steps, batch_size,
-                                                         shape, cond, verbose=False, **kwargs)
-
+                                                        shape, cond, verbose=False, **kwargs)
         else:
             samples, intermediates = self.sample(cond=cond, batch_size=batch_size,
-                                                 return_intermediates=True, **kwargs)
-
+                                                return_intermediates=True, **kwargs)
         return samples, intermediates
 
     @torch.no_grad()
@@ -1327,6 +1372,45 @@ class LatentDiffusion(DDPM):
         x = nn.functional.conv2d(x, weight=self.colorize)
         x = 2. * (x - x.min()) / (x.max() - x.min()) - 1.
         return x
+
+    def set_blend_weight(self, weight):
+        """
+        Set the blending weight for Visual Concept Fusion.
+        
+        Args:
+            weight (float): Value between 0.0 and 1.0 where:
+                           1.0 = full text influence
+                           0.0 = full image influence
+        """
+        assert 0.0 <= weight <= 1.0, "Blend weight must be between 0.0 and 1.0"
+        self.ref_blend_weight = weight
+        
+    def set_use_ref_img(self, use_ref_img: bool):
+        """
+        Enable or disable the use of reference images for conditioning.
+        
+        Args:
+            use_ref_img (bool): If True, use reference images for conditioning.
+        """
+        self.use_ref_img = use_ref_img
+
+    @torch.no_grad()
+    def get_image_conditioning(self, image):
+        """
+        Get CLIP image features for conditioning.
+        
+        Args:
+            image (torch.Tensor): Image tensor in format [B, C, H, W]
+        Returns:
+            torch.Tensor: Projected image features
+        """
+        if not self.use_ref_img:
+            raise ValueError("Image encodings not enabled")
+            
+        clip_inputs = self.clip_processor(images=image, return_tensors="pt").to(self.device)
+        image_features = self.clip_model.get_image_features(**clip_inputs)
+        projected_features = self.image_projection(image_features)
+        return projected_features / projected_features.norm(dim=-1, keepdim=True)
 
 
 class DiffusionWrapper(pl.LightningModule):

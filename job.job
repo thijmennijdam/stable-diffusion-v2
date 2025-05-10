@@ -1,0 +1,32 @@
+#!/bin/bash
+
+#SBATCH --partition=gpu_a100
+#SBATCH --gpus=1
+#SBATCH --gpus-per-node=1
+#SBATCH --job-name=RunMethod
+#SBATCH --ntasks=1
+#SBATCH --cpus-per-task=18
+#SBATCH --time=00:20:00
+#SBATCH --output=RunMethod_%A_setup_and_imagen.out
+
+module load 2023
+module load CUDA/11.3.0
+module load Anaconda3/2023.07-2 
+
+# conda env create -f environment.yaml
+
+source activate ldmv2
+
+pip install wandb
+# python scripts/txt2img.py \
+#   --prompt "A puppy to the right of a kitten" \
+#   --ckpt weights/stable-diffusion-2-1/v2-1_768-ema-pruned.ckpt \
+#   --config configs/stable-diffusion/v2-inference-v.yaml \
+#   --H 768 --W 768
+
+python scripts/txt2img.py \
+  --prompt "a professional photograph of an astronaut riding a horse" \
+  --ckpt /scratch-shared/holy-triangle/weights/stable-diffusion-2-1/v2-1_768-ema-pruned.ckpt \
+  --config configs/stable-diffusion/v2-inference-v.yaml \
+  --H 768 --W 768
+
