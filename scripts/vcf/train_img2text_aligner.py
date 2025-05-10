@@ -12,6 +12,8 @@ from ldm.modules.encoders.modules import (
     FrozenOpenCLIPEmbedder,
     FrozenOpenCLIPImageEmbedder,
 )
+from dotenv import load_dotenv
+load_dotenv()
 
 
 class ImageToTextAligner(nn.Module):
@@ -133,14 +135,20 @@ def prepare_dataloader(dataset_names, batch_size=32):
         ]
     )
 
+    dataset_name_dict = {
+        "flickr30k": "lmms-lab/flickr30k",
+        "coco": "jxie/coco_captions",
+    }
+    # TODO: loading/parsing the dataset might need adustments; also maybe let's add val dataset and log the metrics 
+
     def preprocess(example):
         image = example["image"].convert("RGB")
         image = transform(image)
-        text = example["text"]
+        text = example["caption"]
         return {"image": image, "text": text}
 
     for dataset_name in dataset_names:
-        dataset = load_dataset(dataset_name, split="train")
+        dataset = load_dataset(dataset_name_dict[dataset_name], split="train")
         dataset = dataset.map(preprocess)
         datasets.append(dataset)
 
@@ -227,6 +235,7 @@ def parse_args():
 
 if __name__ == "__main__":
     args = parse_args()
+    wandb.login(key=os.getenv("WANDB_API_KEY"))
     wandb.init(
         project=args.wandb_project, entity=args.wandb_entity, config=vars(args)
     )
