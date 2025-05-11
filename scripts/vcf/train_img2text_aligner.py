@@ -15,6 +15,7 @@ from ldm.modules.encoders.modules import (
 )
 from dotenv import load_dotenv
 from sklearn.model_selection import train_test_split
+from typing import List, Tuple
 
 load_dotenv()
 
@@ -128,19 +129,19 @@ def info_nce_loss(
 
 
 def prepare_dataloaders(
-    dataset_names: list[str],
+    dataset_names: List[str],
     batch_size: int = 32
-) -> tuple[DataLoader, DataLoader, DataLoader]:
+) -> Tuple[DataLoader, DataLoader, DataLoader]:
     """
     Loads and preprocesses datasets, returning DataLoaders for train, val, and test.
     Flickr is split into 80/10/10; COCO uses its built-in splits.
 
     Args:
-        dataset_names (list[str]): List of dataset names to load (e.g., ["flickr30k", "coco"]).
+        dataset_names (List[str]): List of dataset names to load (e.g., ["flickr30k", "coco"]).
         batch_size (int): Batch size for the DataLoaders.
 
     Returns:
-        tuple[DataLoader, DataLoader, DataLoader]: Train, validation, and test DataLoaders.
+        Tuple[DataLoader, DataLoader, DataLoader]: Train, validation, and test DataLoaders.
     """
     dataset_name_dict = {
         "flickr30k": "lmms-lab/flickr30k",
