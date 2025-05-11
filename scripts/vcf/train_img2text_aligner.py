@@ -1,6 +1,7 @@
 import argparse
 import os
 import wandb
+import random
 from tqdm import tqdm
 import torch
 import torch.nn as nn
@@ -61,10 +62,10 @@ def cosine_similarity_loss(image_tokens, text_tokens, aligner):
         Tensor: Scalar cosine similarity loss.
     """
     # Align image embeddings
-    aligned_img = aligner(image_tokens)  # [B, N_img_tokens, D]
+    img_repr = aligner(image_tokens)  # [B, D]
 
     # Mean-pool both
-    img_repr = aligned_img.mean(dim=1)  # [B, D]
+    # img_repr = aligned_img.mean(dim=1)  # [B, D]  # no need to, as the image embeddings are already projected
     text_repr = text_tokens.mean(dim=1)  # [B, D]
 
     # Normalize
@@ -141,15 +142,21 @@ def prepare_dataloader(dataset_names, batch_size=32):
     }
     # TODO: loading/parsing the dataset might need adustments; also maybe let's add val dataset and log the metrics 
 
-    def preprocess(example):
-        image = example["image"].convert("RGB")
-        image = transform(image)
-        text = example["caption"]
-        return {"image": image, "text": text}
+    def preprocess(batch):
+        images = [transform(img.convert("RGB")) for img in batch["image"]]
+        
+        # each image apparantly has multiple captions, so we randomly select one
+        # NOTE: we can think of something better
+        texts = [
+            random.choice(captions) if isinstance(captions, (list, tuple)) else captions
+            for captions in batch["caption"]
+        ]
+        
+        return {"image": images, "text": texts}
 
     for dataset_name in dataset_names:
-        dataset = load_dataset(dataset_name_dict[dataset_name], split="train")
-        dataset = dataset.map(preprocess)
+        dataset = load_dataset(dataset_name_dict[dataset_name], split="test")
+        dataset.set_transform(preprocess)
         datasets.append(dataset)
 
     combined_dataset = ConcatDataset(datasets)
@@ -185,11 +192,11 @@ def train_aligner(dataloader, clip_text_encoder, clip_image_encoder, loss_fn, ar
         progress = tqdm(dataloader, desc=f"Epoch {epoch+1}/{args.epochs}")
         for batch in progress:
             images = batch["image"].to(device)
+            
             texts = batch["text"]
 
             text_features = clip_text_encoder.encode(texts)
             image_features = clip_image_encoder(images)
-
             loss = loss_fn(image_features, text_features, aligner)
             optimizer.zero_grad()
             loss.backward()
@@ -247,9 +254,10 @@ if __name__ == "__main__":
     # NOTE: in FrozenOpenCLIPImageEmbedder penultimate layer is not implemented though I think we can use the output as it is (from .visual) and align it
     clip_text_encoder = FrozenOpenCLIPEmbedder(
         device=args.device, layer="penultimate"
-    )
-    clip_image_encoder = FrozenOpenCLIPImageEmbedder(device=args.device)
-
+    ).to(args.device)
+       
+    clip_image_encoder = FrozenOpenCLIPImageEmbedder(device=args.device).to(args.device)
+    
     aligner = train_aligner(
         dataloader, clip_text_encoder, clip_image_encoder, loss_function, args
     )
