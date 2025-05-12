@@ -4,7 +4,7 @@
 #SBATCH --cpus-per-task=8
 #SBATCH --job-name=img2text_aligner
 #SBATCH --output=/home/scur0721/project/stable-diffusion-v2/outputs/jobs/img2text_aligner.out
-#SBATCH --time=00:10:00
+#SBATCH --time=04:00:00
 #SBATCH --mem=80G
 #SBATCH --hint=nomultithread
 
@@ -13,7 +13,7 @@ module purge
 module load 2022
 module load CUDA/11.7.0
 
-cd /home/scur0721/project/stable-diffusion-v2
+cd /home/$USER/project/stable-diffusion-v2
 source .venv/bin/activate
 # uv pip install datasets
 
