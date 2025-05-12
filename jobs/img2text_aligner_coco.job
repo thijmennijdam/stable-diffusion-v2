@@ -1,0 +1,46 @@
+#!/bin/bash
+#SBATCH --partition=gpu_a100
+#SBATCH --gpus=1
+#SBATCH --cpus-per-task=16
+#SBATCH --job-name=coco_img2text_aligner
+#SBATCH --output=/home/azywot/FOMO/stable-diffusion-v2/outputs/jobs/coco_img2text_aligner_%A.out
+#SBATCH --time=14:00:00
+#SBATCH --mem=80G
+#SBATCH --hint=nomultithread
+
+echo "✅ Job started at: $(date)"
+module purge
+module load 2022
+module load CUDA/11.7.0
+
+cd /home/azywot/FOMO/stable-diffusion-v2
+source .venv/bin/activate
+
+export HF_DATASETS_CACHE="/scratch-shared/holy-triangle/huggingface_datasets"
+export TRANSFORMERS_CACHE="/scratch-shared/holy-triangle/huggingface_models"
+
+# # Run the training script: cosine loss
+python scripts/vcf/train_img2text_aligner.py \
+  --datasets 'coco' \
+  --loss cosine \
+  --batch_size 256 \
+  --epochs 10 \
+  --lr 1e-4 \
+  --device cuda \
+  --wandb_project text-image-aligner \
+  --model_path weights/img2text_aligner/coco_cosine/model.pth \
+  --save_every 2
+
+# Run the training script: infonce loss
+python scripts/vcf/train_img2text_aligner.py \
+  --datasets 'coco' \
+  --loss infonce \
+  --batch_size 256 \
+  --epochs 10 \
+  --lr 1e-4 \
+  --device cuda \
+  --wandb_project text-image-aligner \
+  --model_path weights/img2text_aligner/coco_infonce/model.pth \
+  --save_every 2
+
+  
