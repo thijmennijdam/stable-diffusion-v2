@@ -256,6 +256,16 @@ def train_aligner(
     save_every = args.save_every
 
     aligner = ImageToTextAligner(dim=1024).to(device)
+    # Load pretrained model if specified
+    if args.resume_from and os.path.isfile(args.resume_from):
+        print(f"Loading pretrained aligner from {args.resume_from}")
+        aligner.load_state_dict(torch.load(args.resume_from, map_location=device))
+    
+    # Initial validation loss
+    initial_val_loss = evaluate_loss(val_loader, clip_text_encoder, clip_image_encoder, loss_fn, aligner, device)
+    print(f"Initial Validation Loss: {initial_val_loss:.4f}")
+    wandb.log({"initial_val_loss": initial_val_loss})
+    
     optimizer = torch.optim.Adam(aligner.parameters(), lr=args.lr)
     wandb.watch(aligner, log="all")
     os.makedirs(os.path.dirname(save_path), exist_ok=True)
@@ -295,7 +305,8 @@ def train_aligner(
             print(f"Model checkpoint saved at {checkpoint_path}")
 
     wandb.log({"best_val_loss": best_val_loss})
-    wandb.log({"best_model": wandb.Artifact(best_model_path, type="model")})
+    best_model_path_filename = os.path.basename(best_model_path)
+    wandb.log({"best_model": wandb.Artifact(best_model_path_filename, type="model")})
     wandb.save(best_model_path)
 
     # Load and evaluate best model on test set
@@ -325,6 +336,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--wandb_entity", type=str, default=None)
     parser.add_argument("--model_path", type=str, default="weights/img2text_aligner/model.pth")
     parser.add_argument("--save_every", type=int, default=5, help="Save model every N epochs")
+    parser.add_argument("--resume_from", type=str, default=None, help="Path to a pretrained aligner checkpoint")
     return parser.parse_args()
 
 
