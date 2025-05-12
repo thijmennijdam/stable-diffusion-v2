@@ -47,10 +47,10 @@ class ImageToTextAligner(nn.Module):
         Forward pass to project image embeddings.
 
         Args:
-            x (Tensor): Input tensor of shape [B, N, D].
+            x (Tensor): Input tensor of shape [B, ..., D].
 
         Returns:
-            Tensor: Projected tensor of shape [B, N, D].
+            Tensor: Projected tensor of shape [B, ..., D].
         """
         return self.proj(x)
 
