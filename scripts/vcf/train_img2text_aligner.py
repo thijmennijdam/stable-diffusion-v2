@@ -106,10 +106,10 @@ def info_nce_loss(
     Returns:
         torch.Tensor: Scalar InfoNCE loss.
     """
-    B, _, D = image_tokens.shape
+    B, D = image_tokens.shape
 
     # Align and pool
-    aligned_img = aligner(image_tokens).mean(dim=1)  # [B, D]
+    aligned_img = aligner(image_tokens) # .mean(dim=1)  # [B, D]
     text_repr = text_tokens.mean(dim=1)  # [B, D]
 
     # Normalize
