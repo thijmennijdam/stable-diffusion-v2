@@ -47,10 +47,10 @@ class ImageToTextAligner(nn.Module):
         Forward pass to project image embeddings.
 
         Args:
-            x (Tensor): Input tensor of shape [B, N, D].
+            x (Tensor): Input tensor of shape [B, ..., D].
 
         Returns:
-            Tensor: Projected tensor of shape [B, N, D].
+            Tensor: Projected tensor of shape [B, ..., D].
         """
         return self.proj(x)
 
@@ -106,10 +106,10 @@ def info_nce_loss(
     Returns:
         torch.Tensor: Scalar InfoNCE loss.
     """
-    B, _, D = image_tokens.shape
+    B, D = image_tokens.shape
 
     # Align and pool
-    aligned_img = aligner(image_tokens).mean(dim=1)  # [B, D]
+    aligned_img = aligner(image_tokens) # .mean(dim=1)  # [B, D]
     text_repr = text_tokens.mean(dim=1)  # [B, D]
 
     # Normalize
