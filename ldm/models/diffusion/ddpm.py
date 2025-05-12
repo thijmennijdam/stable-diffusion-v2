@@ -17,7 +17,6 @@ from functools import partial
 import itertools
 from tqdm import tqdm
 from torchvision.utils import make_grid
-from transformers import CLIPProcessor, CLIPModel
 from pytorch_lightning.utilities.distributed import rank_zero_only
 from omegaconf import ListConfig
 
@@ -28,6 +27,8 @@ from ldm.models.autoencoder import IdentityFirstStage, AutoencoderKL
 from ldm.modules.diffusionmodules.util import make_beta_schedule, extract_into_tensor, noise_like
 from ldm.models.diffusion.ddim import DDIMSampler
 from ldm.modules.encoders.modules import FrozenOpenCLIPImageEmbedder
+from ldm.modules.vcf.aligner import ImageToTextAligner
+
 '''
 Added ref_blend_weight and clip_model_name as class variables.
 Added a self.image_projection layer to align image features with text embedding space.
@@ -544,7 +545,7 @@ class LatentDiffusion(DDPM):
                  scale_by_std=False,
                  force_null_conditioning=False,
                  use_ref_img=False,
-                 ref_blend_weight=0.7,  # Add control for text-image blending
+                 ref_blend_weight=0.9,  # Add control for text-image blending
                 #  clip_model_name="openai/clip-vit-large-patch14",  # Make CLIP model configurable
                  *args, **kwargs):
         self.force_null_conditioning = force_null_conditioning
@@ -596,19 +597,15 @@ class LatentDiffusion(DDPM):
         self.use_ref_img = use_ref_img
         self.ref_blend_weight = ref_blend_weight
 
-        # if self.use_ref_img:
-        self.create_ref_img_encoder()
+        if self.use_ref_img:
+            self.create_ref_img_encoder()
 
 
     def create_ref_img_encoder(self):
-        
-        # Instantiate CLIP model
-        if self.use_ref_img:
-            print("Using CLIP model for reference image encoding.")
-            self.clip_model = FrozenOpenCLIPImageEmbedder(device=self.device)
-            self.clip_model = self.clip_model.to(self.device).half()
-            self.clip_model.eval()
-
+        print("Using CLIP model for reference image encoding.")
+        self.clip_model = FrozenOpenCLIPImageEmbedder(device=self.device).to(self.device)
+        self.image_to_text_aligner = ImageToTextAligner(dim=1024).to(self.device)
+        self.clip_model.eval()
 
     def make_cond_schedule(self, ):
         self.cond_ids = torch.full(size=(self.num_timesteps,), fill_value=self.num_timesteps - 1, dtype=torch.long)
@@ -707,15 +704,17 @@ class LatentDiffusion(DDPM):
             ref_image = ref_image.to(self.device)#.float()
 
             # Extract and normalize CLIP image features
-            image_features = self.clip_model(ref_image)
-            image_features = image_features / image_features.norm(dim=-1, keepdim=True)
-
+            image_features = self.clip_model(ref_image) # [B, D]
+            image_features = image_features / image_features.norm(dim=-1, keepdim=True) 
+            
+            image_features_aligned = self.image_to_text_aligner(image_features) # [B, D]
+            
             # Normalize text features
             c = c / c.norm(dim=-1, keepdim=True)
 
             # Blend text and image features
             alpha = self.ref_blend_weight
-            c = alpha * c + (1 - alpha) * image_features
+            c = alpha * c + (1 - alpha) * image_features_aligned
 
             # Renormalize the combined features
             c = c / c.norm(dim=-1, keepdim=True)

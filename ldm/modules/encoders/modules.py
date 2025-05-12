@@ -279,7 +279,7 @@ class FrozenOpenCLIPImageEmbedder(AbstractEncoder):
         for param in self.parameters():
             param.requires_grad = False
 
-    # @autocast
+    # @autocast removed this
     def forward(self, image, no_dropout=False):
         z = self.encode_with_vision_transformer(image)
         if self.ucg_rate > 0. and not no_dropout:
