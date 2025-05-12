@@ -5,7 +5,7 @@
 Start an interactive GPU session:
 
 ```bash
-srun --partition=gpu_h100 --gpus=1 --ntasks=1 --cpus-per-task=9 --time=00:30:00 --pty bash -i
+srun --partition=gpu_a100 --gpus=1 --ntasks=1 --cpus-per-task=9 --time=00:30:00 --pty bash -i
 ```
 
 Then:
@@ -61,7 +61,17 @@ uv run python scripts/txt2img.py \
   --prompt "a professional photograph of an astronaut riding a horse" \
   --ckpt /scratch-shared/holy-triangle/weights/stable-diffusion-2-1/v2-1_768-ema-pruned.ckpt \
   --config configs/stable-diffusion/v2-inference-v.yaml \
-  --H 768 --W 768
+  --H 768 --W 768 \
+  --ref_img "data/picasso_style.jpg"
+```
+
+```bash
+uv run python scripts/txt2img.py \
+  --prompt "a professional photograph of an astronaut riding a horse" \
+  --ckpt model_checkpoints.ckpt \
+  --config configs/stable-diffusion/v2-inference-v.yaml \
+  --H 768 --W 768 \
+  --ref_img "data/picasso_style.jpg"
 ```
 
 ---
