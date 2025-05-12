@@ -178,14 +178,28 @@ def prepare_dataloaders(
             test_sets.append(Subset(full_dataset, test_idx))
 
         elif dataset_name == "coco":
-            train_set = load_dataset(dataset_id, split="train")
-            val_set = load_dataset(dataset_id, split="validation")
-            test_set = load_dataset(dataset_id, split="test")
-            for ds in [train_set, val_set, test_set]:
+            
+            subset_ratio = 0.1  # 10% of the dataset since COCO is 616,767 images
+            seed = 42  # for reproducibility
+
+            def subsample(dataset, ratio=subset_ratio, seed=seed):
+                total_len = len(dataset)
+                num_samples = int(total_len * ratio)
+                indices = random.Random(seed).sample(range(total_len), num_samples)
+                return Subset(dataset, indices)
+
+            full_train = load_dataset(dataset_id, split="train")
+            full_val = load_dataset(dataset_id, split="validation")
+            full_test = load_dataset(dataset_id, split="test")
+
+            # Apply preprocessing first so Subset works properly
+            for ds in [full_train, full_val, full_test]:
                 ds.set_transform(preprocess)
-            train_sets.append(train_set)
-            val_sets.append(val_set)
-            test_sets.append(test_set)
+
+            train_sets.append(subsample(full_train))
+            val_sets.append(subsample(full_val))
+            test_sets.append(subsample(full_test))
+
 
     train_loader = DataLoader(ConcatDataset(train_sets), batch_size=batch_size, shuffle=True)
     val_loader = DataLoader(ConcatDataset(val_sets), batch_size=batch_size, shuffle=False)
