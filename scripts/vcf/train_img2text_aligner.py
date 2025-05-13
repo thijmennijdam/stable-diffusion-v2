@@ -23,6 +23,8 @@ if not os.getenv("WANDB_API_KEY"):
     raise ValueError("WANDB_API_KEY is not set in the environment.")
 
 
+
+
 class ImageToTextAligner(nn.Module):
     """
     A neural module that projects image feature embeddings into the text embedding space
@@ -58,7 +60,7 @@ class ImageToTextAligner(nn.Module):
 def cosine_similarity_loss(
     image_tokens: torch.Tensor,
     text_tokens: torch.Tensor,
-    aligner: nn.Module
+    img_repr: torch.Tensor
 ) -> torch.Tensor:
     """
     Computes the cosine similarity loss between aligned image and text embeddings.
@@ -71,8 +73,7 @@ def cosine_similarity_loss(
     Returns:
         torch.Tensor: Scalar cosine similarity loss.
     """
-    # Align image embeddings
-    img_repr = aligner(image_tokens)  # [B, D]
+    
 
     # Mean-pool both
     # img_repr = aligned_img.mean(dim=1)  # [B, D]  # no need to, as the image embeddings are already projected
@@ -91,7 +92,7 @@ def cosine_similarity_loss(
 def info_nce_loss(
     image_tokens: torch.Tensor,
     text_tokens: torch.Tensor,
-    aligner: nn.Module,
+    aligned_img: torch.Tensor,
     temperature: float = 0.07
 ) -> torch.Tensor:
     """
@@ -109,7 +110,6 @@ def info_nce_loss(
     B, D = image_tokens.shape
 
     # Align and pool
-    aligned_img = aligner(image_tokens) # .mean(dim=1)  # [B, D]
     text_repr = text_tokens.mean(dim=1)  # [B, D]
 
     # Normalize
@@ -240,7 +240,7 @@ def evaluate_loss(
             images = batch["image"].to(device)
             texts = batch["text"]
             text_features = clip_text_encoder.encode(texts)
-            image_features = clip_image_encoder(images)
+            image_features = clip_image_encoder(images)  # Note: these are now either [B, Num_img_patches, D] or [B, D]
             loss = loss_fn(image_features, text_features, aligner)
             total_loss += loss.item()
     aligner.train()
@@ -298,8 +298,12 @@ def train_aligner(
             images = batch["image"].to(device)
             texts = batch["text"]
             text_features = clip_text_encoder.encode(texts)
-            image_features = clip_image_encoder(images)
-            loss = loss_fn(image_features, text_features, aligner)
+            image_features = clip_image_encoder(images,  preproject=True, exclude_cls=args.exclude_cls )  # Note: these are now either [B, Num_img_patches, D] or [B, D]
+            
+            # This is called either img_repr or aligned_img in the original code
+            img_repr = aligner(image_features).mean(dim=1) # .mean(dim=1)  # [B, Num_img_patches, D] to [B, D]
+
+            loss = loss_fn(image_features, text_features, img_repr)
             optimizer.zero_grad()
             loss.backward()
             optimizer.step()
@@ -355,6 +359,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--model_path", type=str, default="weights/img2text_aligner/model.pth")
     parser.add_argument("--save_every", type=int, default=5, help="Save model every N epochs")
     parser.add_argument("--resume_from", type=str, default=None, help="Path to a pretrained aligner checkpoint")
+    parser.add_argument("--exclude_cls", action="store_true", help="Exclude CLS token from image features")
     return parser.parse_args()
 
 

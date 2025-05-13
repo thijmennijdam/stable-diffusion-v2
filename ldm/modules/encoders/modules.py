@@ -280,13 +280,13 @@ class FrozenOpenCLIPImageEmbedder(AbstractEncoder):
             param.requires_grad = False
 
     # @autocast removed this
-    def forward(self, image, no_dropout=False):
-        z = self.encode_with_vision_transformer(image)
+    def forward(self, image, no_dropout=False, preproject=True, exclude_cls=True):
+        z = self.encode_with_vision_transformer(image, preproject=preproject, exclude_cls=exclude_cls)
         if self.ucg_rate > 0. and not no_dropout:
             z = torch.bernoulli((1. - self.ucg_rate) * torch.ones(z.shape[0], device=z.device))[:, None] * z
         return z
     
-    def extract_patch_features(self, visual_model, img):
+    def extract_patch_features(self, visual_model, img, exclude_cls=True):
         # Assume img is preprocessed already
         x = visual_model.patch_embed(img)  # [B, N_patches, D]
         cls_token = visual_model.cls_token.expand(x.shape[0], -1, -1)  # [B, 1, D]
@@ -301,14 +301,15 @@ class FrozenOpenCLIPImageEmbedder(AbstractEncoder):
             x = blk(x)
 
         # OPTIONAL: exclude CLS
-        x = x[:, 1:, :]  # [B, N_patches, D]
+        if exclude_cls:
+            x = x[:, 1:, :]  # [B, N_patches, D]
         return x
 
-    def encode_with_vision_transformer(self, img, preproject=True):
+    def encode_with_vision_transformer(self, img, preproject=True, exclude_cls=True):
         img = self.preprocess(img)
         
         if preproject:
-            x = self.extract_patch_features(self.model.visual, img) # [B, N_patches+1, D], pre-projection
+            x = self.extract_patch_features(self.model.visual, img, exclude_cls=exclude_cls) # [B, N_patches+1, D], pre-projection
         else:
             x = self.model.visual(img)
         return x
