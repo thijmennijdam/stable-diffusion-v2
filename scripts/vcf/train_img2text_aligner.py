@@ -204,6 +204,10 @@ def prepare_dataloaders(
     train_loader = DataLoader(ConcatDataset(train_sets), batch_size=batch_size, shuffle=True)
     val_loader = DataLoader(ConcatDataset(val_sets), batch_size=batch_size, shuffle=False)
     test_loader = DataLoader(ConcatDataset(test_sets), batch_size=batch_size, shuffle=False)
+    # train_loader = DataLoader(ConcatDataset(train_sets), batch_size=batch_size, shuffle=True, num_workers=4)
+    # val_loader = DataLoader(ConcatDataset(val_sets), batch_size=batch_size, shuffle=False, num_workers=4)
+    # test_loader = DataLoader(ConcatDataset(test_sets), batch_size=batch_size, shuffle=False, num_workers=4)
+
     return train_loader, val_loader, test_loader
 
 
