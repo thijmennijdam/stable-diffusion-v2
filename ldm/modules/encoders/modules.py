@@ -285,10 +285,32 @@ class FrozenOpenCLIPImageEmbedder(AbstractEncoder):
         if self.ucg_rate > 0. and not no_dropout:
             z = torch.bernoulli((1. - self.ucg_rate) * torch.ones(z.shape[0], device=z.device))[:, None] * z
         return z
+    
+    def extract_patch_features(self, visual_model, img):
+        # Assume img is preprocessed already
+        x = visual_model.patch_embed(img)  # [B, N_patches, D]
+        cls_token = visual_model.cls_token.expand(x.shape[0], -1, -1)  # [B, 1, D]
+        x = torch.cat((cls_token, x), dim=1)  # [B, N+1, D]
+        x = x + visual_model.positional_embedding
+        x = visual_model.ln_pre(x)
 
-    def encode_with_vision_transformer(self, img):
+        # Stop at the penultimate block
+        for i, blk in enumerate(visual_model.transformer.resblocks):
+            if i == len(visual_model.transformer.resblocks) - 1:
+                break  # skip final block
+            x = blk(x)
+
+        # OPTIONAL: exclude CLS
+        x = x[:, 1:, :]  # [B, N_patches, D]
+        return x
+
+    def encode_with_vision_transformer(self, img, preproject=True):
         img = self.preprocess(img)
-        x = self.model.visual(img)
+        
+        if preproject:
+            x = self.extract_patch_features(self.model.visual, img) # [B, N_patches+1, D], pre-projection
+        else:
+            x = self.model.visual(img)
         return x
 
     def encode(self, text):
