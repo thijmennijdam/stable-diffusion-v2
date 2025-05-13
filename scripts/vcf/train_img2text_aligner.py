@@ -363,7 +363,10 @@ if __name__ == "__main__":
     if not os.getenv("WANDB_API_KEY"):
         raise ValueError("WANDB_API_KEY is not set in the environment.")
     wandb.login(key=os.getenv("WANDB_API_KEY"))
-    wandb.init(project=args.wandb_project, entity=args.wandb_entity, config=vars(args))
+    wandb.init(project=args.wandb_project, entity=args.wandb_entity, config=vars(args),
+                name=f"aligner-{args.loss}-{args.datasets}-{args.epochs}epochs-{args.batch_size}bs-{args.lr}lr",
+                # tags= ...
+               )
 
     loss_function = cosine_similarity_loss if args.loss == "cosine" else info_nce_loss
 
