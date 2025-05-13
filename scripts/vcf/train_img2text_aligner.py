@@ -23,8 +23,6 @@ if not os.getenv("WANDB_API_KEY"):
     raise ValueError("WANDB_API_KEY is not set in the environment.")
 
 
-
-
 class ImageToTextAligner(nn.Module):
     """
     A neural module that projects image feature embeddings into the text embedding space
@@ -216,7 +214,8 @@ def evaluate_loss(
     clip_image_encoder: nn.Module,
     loss_fn: callable,
     aligner: nn.Module,
-    device: str
+    device: str,
+    args: argparse.Namespace
 ) -> float:
     """
     Computes average loss over a given dataloader.
@@ -239,8 +238,22 @@ def evaluate_loss(
             images = batch["image"].to(device)
             texts = batch["text"]
             text_features = clip_text_encoder.encode(texts)
-            image_features = clip_image_encoder(images)  # Note: these are now either [B, Num_img_patches, D] or [B, D]
-            loss = loss_fn(image_features, text_features, aligner)
+            
+            # ---------- image feature projection ---------- #
+             
+            image_features = clip_image_encoder(images, preproject=args.preproject, exclude_cls=args.exclude_cls)  # Note: these are now either [B, Num_img_patches, D] or [B, D]
+            
+            # This is called either img_repr or aligned_img in the original code
+            
+            img_repr = aligner(image_features)
+            
+            # If we are using the preprojected features, we need to mean-pool them
+            if args.preproject:
+                img_repr = img_repr.mean(dim=1) # .mean(dim=1)  # [B, Num_img_patches, D] to [B, D]
+                
+            # ---------- image feature projection ---------- #
+            
+            loss = loss_fn(image_features, text_features, img_repr)
             total_loss += loss.item()
     aligner.train()
     return total_loss / len(dataloader)
@@ -279,7 +292,7 @@ def train_aligner(
         aligner.load_state_dict(torch.load(args.resume_from, map_location=device))
     
     # Initial validation loss
-    initial_val_loss = evaluate_loss(val_loader, clip_text_encoder, clip_image_encoder, loss_fn, aligner, device)
+    initial_val_loss = evaluate_loss(val_loader, clip_text_encoder, clip_image_encoder, loss_fn, aligner, device, args)
     print(f"Initial Validation Loss: {initial_val_loss:.4f}")
     wandb.log({"initial_val_loss": initial_val_loss})
     
@@ -298,15 +311,14 @@ def train_aligner(
             texts = batch["text"]
             text_features = clip_text_encoder.encode(texts)
             
-            PREPROJECT = True
-            image_features = clip_image_encoder(images,  preproject=PREPROJECT, exclude_cls=args.exclude_cls )  # Note: these are now either [B, Num_img_patches, D] or [B, D]
+            image_features = clip_image_encoder(images,  preproject=args.preproject, exclude_cls=args.exclude_cls )  # Note: these are now either [B, Num_img_patches, D] or [B, D]
             
             # This is called either img_repr or aligned_img in the original code
             
             img_repr = aligner(image_features)
             
             # If we are using the preprojected features, we need to mean-pool them
-            if PREPROJECT:
+            if args.preproject:
                 img_repr = img_repr.mean(dim=1) # .mean(dim=1)  # [B, Num_img_patches, D] to [B, D]
 
             loss = loss_fn(image_features, text_features, img_repr)
@@ -366,6 +378,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--save_every", type=int, default=5, help="Save model every N epochs")
     parser.add_argument("--resume_from", type=str, default=None, help="Path to a pretrained aligner checkpoint")
     parser.add_argument("--exclude_cls", action="store_true", help="Exclude CLS token from image features")
+    parser.add_argument("--preproject", action="store_true", help="Use preprojected image features")
     return parser.parse_args()
 
 
@@ -375,6 +388,9 @@ if __name__ == "__main__":
         raise ValueError("WANDB_API_KEY is not set in the environment.")
     wandb.login(key=os.getenv("WANDB_API_KEY"))
     wandb.init(project=args.wandb_project, entity=args.wandb_entity, config=vars(args))
+    wandb.init(project=args.wandb_project, entity=args.wandb_entity, config=vars(args),
+                name=f"aligner-{args.loss}-{args.datasets}-{args.epochs}epochs-{args.batch_size}bs-{args.lr}lr",
+               )
 
     loss_function = cosine_similarity_loss if args.loss == "cosine" else info_nce_loss
 
