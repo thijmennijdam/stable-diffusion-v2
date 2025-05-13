@@ -297,10 +297,17 @@ def train_aligner(
             images = batch["image"].to(device)
             texts = batch["text"]
             text_features = clip_text_encoder.encode(texts)
-            image_features = clip_image_encoder(images,  preproject=True, exclude_cls=args.exclude_cls )  # Note: these are now either [B, Num_img_patches, D] or [B, D]
+            
+            PREPROJECT = True
+            image_features = clip_image_encoder(images,  preproject=PREPROJECT, exclude_cls=args.exclude_cls )  # Note: these are now either [B, Num_img_patches, D] or [B, D]
             
             # This is called either img_repr or aligned_img in the original code
-            img_repr = aligner(image_features).mean(dim=1) # .mean(dim=1)  # [B, Num_img_patches, D] to [B, D]
+            
+            img_repr = aligner(image_features)
+            
+            # If we are using the preprojected features, we need to mean-pool them
+            if PREPROJECT:
+                img_repr = img_repr.mean(dim=1) # .mean(dim=1)  # [B, Num_img_patches, D] to [B, D]
 
             loss = loss_fn(image_features, text_features, img_repr)
             optimizer.zero_grad()
