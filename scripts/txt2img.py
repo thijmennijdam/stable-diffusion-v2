@@ -223,6 +223,12 @@ def parse_args():
         default=0.8,
         help="Blend weight for reference image. 1.0 corresponds to full destruction of information in init image. Used to balance the influence of the reference image and the prompt.",
     )
+    parser.add_argument(
+        "--aligner_model_path",
+        type=str,
+        default="weights/img2text_aligner/coco_cosine/model_best.pth",
+        help="Path to the aligner model. If not specified, the default model will be used.",
+    )
     
     opt = parser.parse_args()
     return opt
@@ -252,6 +258,7 @@ def main(opt):
         model.set_blend_weight(opt.ref_blend_weight)
         model.set_use_ref_img(True)
         model.create_ref_img_encoder()
+        model.create_image_to_text_aligner(opt.aligner_model_path)
 
     if opt.plms:
         sampler = PLMSSampler(model, device=device)

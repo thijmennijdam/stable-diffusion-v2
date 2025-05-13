@@ -5,7 +5,7 @@ https://github.com/openai/improved-diffusion/blob/e94489283bb876ac1477d5dd7709bb
 https://github.com/CompVis/taming-transformers
 -- merci
 """
-
+import os
 import torch
 import torch.nn as nn
 import numpy as np
@@ -604,8 +604,23 @@ class LatentDiffusion(DDPM):
     def create_ref_img_encoder(self):
         print("Using CLIP model for reference image encoding.")
         self.clip_model = FrozenOpenCLIPImageEmbedder(device=self.device).to(self.device)
-        self.image_to_text_aligner = ImageToTextAligner(dim=1024).to(self.device)
         self.clip_model.eval()
+    
+    def create_image_to_text_aligner(self, model_path: str):
+        """
+        Loads the ImageToTextAligner model from a .pth file.
+
+        Args:
+            model_path (str): Path to the .pth file containing the saved model weights.
+        """
+        print(f"Loading ImageToTextAligner from {model_path}")
+        self.image_to_text_aligner = ImageToTextAligner(dim=1024).to(self.device)
+        if os.path.isfile(model_path):
+            state_dict = torch.load(model_path, map_location=self.device)
+            self.image_to_text_aligner.load_state_dict(state_dict)
+            print("ImageToTextAligner loaded successfully.")
+        else:
+            raise FileNotFoundError(f"Model file not found at {model_path}")
 
     def make_cond_schedule(self, ):
         self.cond_ids = torch.full(size=(self.num_timesteps,), fill_value=self.num_timesteps - 1, dtype=torch.long)
@@ -705,12 +720,13 @@ class LatentDiffusion(DDPM):
 
             # Extract and normalize CLIP image features
             image_features = self.clip_model(ref_image) # [B, D]
-            image_features = image_features / image_features.norm(dim=-1, keepdim=True) 
-            
+
+
             image_features_aligned = self.image_to_text_aligner(image_features) # [B, D]
-            
-            # Normalize text features
-            c = c / c.norm(dim=-1, keepdim=True)
+            # image_features_aligned = image_features_aligned / image_features_aligned.norm(dim=-1, keepdim=True) 
+        
+            # # Normalize text features
+            # c = c / c.norm(dim=-1, keepdim=True)
 
             # Blend text and image features
             alpha = self.ref_blend_weight
