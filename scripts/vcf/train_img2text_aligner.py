@@ -66,9 +66,9 @@ def cosine_similarity_loss(
     Computes the cosine similarity loss between aligned image and text embeddings.
 
     Args:
-        image_tokens (torch.Tensor): Image embeddings [B, N_img_tokens, D].
+        image_tokens (torch.Tensor): Image embeddings [B, N, D].
         text_tokens (torch.Tensor): Text embeddings [B, N_text_tokens, D].
-        aligner (nn.Module): ImageToTextAligner module.
+        aligner (nn.Module): ImageToTextAligner module [B, D]
 
     Returns:
         torch.Tensor: Scalar cosine similarity loss.
@@ -76,7 +76,6 @@ def cosine_similarity_loss(
     
 
     # Mean-pool both
-    # img_repr = aligned_img.mean(dim=1)  # [B, D]  # no need to, as the image embeddings are already projected
     text_repr = text_tokens.mean(dim=1)  # [B, D]
 
     # Normalize
@@ -101,7 +100,7 @@ def info_nce_loss(
     Args:
         image_tokens (torch.Tensor): Image embeddings [B, N, D].
         text_tokens (torch.Tensor): Text embeddings [B, N, D].
-        aligner (nn.Module): ImageToTextAligner module.
+        aligner (nn.Module): ImageToTextAligner module [B, D]
         temperature (float): Temperature scaling factor for softmax.
 
     Returns:
