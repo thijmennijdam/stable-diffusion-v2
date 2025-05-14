@@ -245,7 +245,7 @@ def put_watermark(img, wm_encoder=None):
 def main(opt):
     seed_everything(opt.seed)
     # Set project and entity name from environment variables
-    opt.wandb_project = os.getenv("WANDB_PROJECT", "check_different_alphas")
+    opt.wandb_project = os.getenv("WANDB_PROJECT", "stable-diffusion-v2")
     opt.wandb_entity = os.getenv("WANDB_ENTITY", "FoMo-2025")
 
     config = OmegaConf.load(f"{opt.config}")
