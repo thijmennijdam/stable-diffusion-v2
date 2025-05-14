@@ -94,3 +94,8 @@ uv run python scripts/txt2img.py \
   --H 768 --W 768 \
   --ref_img "data/picasso_style.jpg"
 ```
+
+
+export HF_DATASETS_CACHE="/scratch-shared/holy-triangle/huggingface_datasets2"
+export TRANSFORMERS_CACHE="/scratch-shared/holy-triangle/huggingface_models2"
+export WANDB_API_KEY="a073531c9973b3a17a47501f4c98affd7d2f3c8c"
