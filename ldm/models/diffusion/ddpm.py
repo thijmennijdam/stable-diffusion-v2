@@ -29,16 +29,6 @@ from ldm.models.diffusion.ddim import DDIMSampler
 from ldm.modules.encoders.modules import FrozenOpenCLIPImageEmbedder
 from ldm.modules.vcf.aligner import ImageToTextAligner
 
-'''
-Added ref_blend_weight and clip_model_name as class variables.
-Added a self.image_projection layer to align image features with text embedding space.
-
-Updated sample_log to use the new image_projection layer. If there's a reference image, it processes it for VCF and applies VCF blending
-
-Added function set_blend_weight to set the blending weight for Visual Concept Fusion.
-Added function get_image_conditioning to get the image conditioning for Visual Concept Fusion.
-'''
-
 __conditioning_keys__ = {'concat': 'c_concat',
                          'crossattn': 'c_crossattn',
                          'adm': 'y'}
@@ -546,7 +536,6 @@ class LatentDiffusion(DDPM):
                  force_null_conditioning=False,
                  use_ref_img=False,
                  ref_blend_weight=0.05,  # Add control for text-image blending
-                #  clip_model_name="openai/clip-vit-large-patch14",  # Make CLIP model configurable
                  *args, **kwargs):
         self.force_null_conditioning = force_null_conditioning
         self.num_timesteps_cond = default(num_timesteps_cond, 1)
@@ -1383,25 +1372,6 @@ class LatentDiffusion(DDPM):
             use_ref_img (bool): If True, use reference images for conditioning.
         """
         self.use_ref_img = use_ref_img
-
-    @torch.no_grad()
-    def get_image_conditioning(self, image):
-        """
-        Get CLIP image features for conditioning.
-        
-        Args:
-            image (torch.Tensor): Image tensor in format [B, C, H, W]
-        Returns:
-            torch.Tensor: Projected image features
-        """
-        if not self.use_ref_img:
-            raise ValueError("Image encodings not enabled")
-            
-        clip_inputs = self.clip_processor(images=image, return_tensors="pt").to(self.device)
-        image_features = self.clip_model.get_image_features(**clip_inputs)
-        projected_features = self.image_projection(image_features)
-        return projected_features / projected_features.norm(dim=-1, keepdim=True)
-
 
 class DiffusionWrapper(pl.LightningModule):
     def __init__(self, diff_model_config, conditioning_key):
