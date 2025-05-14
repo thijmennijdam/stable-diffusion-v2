@@ -545,7 +545,7 @@ class LatentDiffusion(DDPM):
                  scale_by_std=False,
                  force_null_conditioning=False,
                  use_ref_img=False,
-                 ref_blend_weight=0.9,  # Add control for text-image blending
+                 ref_blend_weight=0.05,  # Add control for text-image blending
                 #  clip_model_name="openai/clip-vit-large-patch14",  # Make CLIP model configurable
                  *args, **kwargs):
         self.force_null_conditioning = force_null_conditioning
@@ -716,23 +716,16 @@ class LatentDiffusion(DDPM):
             
         ## --------- Visual Concept Fusion implementation --------- ##
         if self.use_ref_img and ref_image is not None:
-            ref_image = ref_image.to(self.device)#.float()
+            ref_image = ref_image.to(self.device)
 
             # Extract and normalize CLIP image features
             image_features = self.clip_model(ref_image) # [B, D]
-            
             image_features = self.image_to_text_aligner(image_features) # [B, D]
-            # image_features_aligned = image_features_aligned / image_features_aligned.norm(dim=-1, keepdim=True) 
-        
-            # # Normalize text features
-            # c = c / c.norm(dim=-1, keepdim=True)
 
             # Blend text and image features
             alpha = self.ref_blend_weight
             c = (1 - alpha) * c + alpha * image_features
 
-            # Renormalize the combined features
-            # c = c / c.norm(dim=-1, keepdim=True)
         ## --------- End of Visual Concept Fusion implementation --------- ##
         
         return c
@@ -1175,23 +1168,6 @@ class LatentDiffusion(DDPM):
         if ddim:
             ddim_sampler = DDIMSampler(self)
             shape = (self.channels, self.image_size, self.image_size)
-            
-            if ref_image is not None and self.use_ref_img:
-                # Get image conditioning
-                img_cond = self.get_image_conditioning(ref_image)
-                
-                # Apply VCF blending if using cross-attention conditioning
-                if isinstance(cond, dict) and "c_crossattn" in cond:
-                    text_cond = cond["c_crossattn"][0]
-                    text_cond = text_cond / text_cond.norm(dim=-1, keepdim=True)
-                    
-                    # Blend text and image conditioning
-                    alpha = self.ref_blend_weight
-                    hybrid_cond = alpha * text_cond + (1 - alpha) * img_cond
-                    hybrid_cond = hybrid_cond / hybrid_cond.norm(dim=-1, keepdim=True)
-                    
-                    cond["c_crossattn"][0] = hybrid_cond
-            
             samples, intermediates = ddim_sampler.sample(ddim_steps, batch_size,
                                                         shape, cond, verbose=False, **kwargs)
         else:
