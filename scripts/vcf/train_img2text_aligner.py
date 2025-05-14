@@ -368,6 +368,10 @@ def parse_args() -> argparse.Namespace:
 
 if __name__ == "__main__":
     args = parse_args()
+    # print args in a readable format
+    print("Parsed arguments:")
+    for arg, value in vars(args).items():
+        print(f"{arg}: {value}")
     if not os.getenv("WANDB_API_KEY"):
         raise ValueError("WANDB_API_KEY is not set in the environment.")
     wandb.login(key=os.getenv("WANDB_API_KEY"))

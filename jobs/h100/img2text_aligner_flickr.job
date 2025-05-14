@@ -2,7 +2,7 @@
 #SBATCH --partition=gpu_h100
 #SBATCH --gpus=1
 #SBATCH --cpus-per-task=16
-#SBATCH --job-name=flickr_img2text_aligner
+#SBATCH --job-name=new_flickr_img2text_aligner
 #SBATCH --output=/home/azywot/FOMO/stable-diffusion-v2/outputs/jobs/flickr_img2text_aligner_%A.out
 #SBATCH --time=14:00:00
 #SBATCH --mem=80G
@@ -26,6 +26,7 @@ python -c "import torch; print(f'🔧 Torch: {torch.__version__}, CUDA: {torch.v
 export HF_DATASETS_CACHE="/scratch-shared/holy-triangle/huggingface_datasets"
 export TRANSFORMERS_CACHE="/scratch-shared/holy-triangle/huggingface_models"
 
+# TODO: run with the cls included
 # Train using cosine similarity loss
 echo "🚀 Training with cosine similarity loss..."
 python scripts/vcf/train_img2text_aligner.py \
@@ -36,9 +37,11 @@ python scripts/vcf/train_img2text_aligner.py \
   --lr 1e-4 \
   --device cuda \
   --wandb_project text-image-aligner \
-  --model_path weights/img2text_aligner/flickr30k_cosine/model.pth \
-  --save_every 2
+  --model_path weights/img2text_aligner_fixed/flickr30k_cosine/model.pth \
+  --save_every 2 \
+  --exclude_cls
 
+# TODO: run with the cls included
 # Train using InfoNCE loss
 echo "🚀 Training with InfoNCE loss..."
 python scripts/vcf/train_img2text_aligner.py \
@@ -49,8 +52,9 @@ python scripts/vcf/train_img2text_aligner.py \
   --lr 1e-4 \
   --device cuda \
   --wandb_project text-image-aligner \
-  --model_path weights/img2text_aligner/flickr30k_infonce/model.pth \
-  --save_every 2
+  --model_path weights/img2text_aligner_fixed/flickr30k_infonce/model.pth \
+  --save_every 2 \
+  --exclude_cls
 
 echo "✅ Job completed at: $(date)"
 echo "🔚 All done!"
