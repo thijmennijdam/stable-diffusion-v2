@@ -720,9 +720,8 @@ class LatentDiffusion(DDPM):
 
             # Extract and normalize CLIP image features
             image_features = self.clip_model(ref_image) # [B, D]
-
-
-            image_features_aligned = self.image_to_text_aligner(image_features) # [B, D]
+            
+            image_features = self.image_to_text_aligner(image_features) # [B, D]
             # image_features_aligned = image_features_aligned / image_features_aligned.norm(dim=-1, keepdim=True) 
         
             # # Normalize text features
@@ -730,10 +729,10 @@ class LatentDiffusion(DDPM):
 
             # Blend text and image features
             alpha = self.ref_blend_weight
-            c = alpha * c + (1 - alpha) * image_features_aligned
+            c = (1 - alpha) * c + alpha * image_features
 
             # Renormalize the combined features
-            c = c / c.norm(dim=-1, keepdim=True)
+            # c = c / c.norm(dim=-1, keepdim=True)
         ## --------- End of Visual Concept Fusion implementation --------- ##
         
         return c

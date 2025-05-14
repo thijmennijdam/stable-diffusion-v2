@@ -208,7 +208,7 @@ def parse_args():
         "--log_steps",
         nargs="+",
         type=int,
-        default=[0, 10, 25, -1],  # -1 means final step
+        default=[0, 10, 20, 30, 40, -1],  # -1 means final step
         help="Steps to log intermediate results at"
     )
     parser.add_argument(
@@ -245,7 +245,7 @@ def put_watermark(img, wm_encoder=None):
 def main(opt):
     seed_everything(opt.seed)
     # Set project and entity name from environment variables
-    opt.wandb_project = os.getenv("WANDB_PROJECT", "stable-diffusion-v2")
+    opt.wandb_project = os.getenv("WANDB_PROJECT", "check_different_alphas")
     opt.wandb_entity = os.getenv("WANDB_ENTITY", "FoMo-2025")
 
     config = OmegaConf.load(f"{opt.config}")
@@ -311,7 +311,8 @@ def main(opt):
             ref_image = (ref_image - 0.5) * 2           
         else:
             print(f"Warning: Reference image not found at {opt.ref_img}. Skipping.")
-
+    else:
+        ref_image = None
     
     if opt.torchscript or opt.ipex:
         transformer = model.cond_stage_model.model
@@ -386,7 +387,17 @@ def main(opt):
             for _ in range(3):
                 x_samples_ddim = model.decode_first_stage(samples_ddim)
 
-    wandb_run_name = f"txt2img-{datetime.now().strftime('%d-%m-%Y_%H-%M-%S')}"
+
+    def clean_string(s):
+        return s.replace(" ", "_").replace(",", "").replace(".", "").lower()
+
+    short_prompt = clean_string(opt.prompt)[:30]
+    ref_mode = f"ref{opt.ref_blend_weight}" if opt.ref_img else "noref"
+    aligner_name = os.path.splitext(os.path.basename(opt.aligner_model_path))[0] if opt.aligner_model_path else "noaligner"
+    timestamp = datetime.now().strftime("%d%m_%H%M%S")
+
+    wandb_run_name = f"{short_prompt}_{ref_mode}_{aligner_name}"
+
     wandb.init(
         project=opt.wandb_project, 
         entity=opt.wandb_entity,
