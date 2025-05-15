@@ -168,5 +168,7 @@ cython_debug/
 .vscode/
 
 # i think everyone should have their own lock file, and sync or add stuff to the pyproject
-uv.
-lock
+uv.lock
+
+thijmen.md
+model_checkpoint.ckpt
