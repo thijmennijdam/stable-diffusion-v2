@@ -302,6 +302,7 @@ def train_aligner(
     for epoch in range(args.epochs):
         epoch_loss = 0.0
         progress = tqdm(train_loader, desc=f"Epoch {epoch+1}/{args.epochs}")
+        step = 0
         for batch in progress:
             images = batch["image"].to(device)
             texts = batch["text"]
@@ -313,6 +314,14 @@ def train_aligner(
             optimizer.step()
             epoch_loss += loss.item()
             progress.set_postfix(loss=loss.item())
+
+            # Log training loss every step
+            wandb.log({
+                "train_loss_step": loss.item(),
+                "epoch": epoch + 1,
+                "step": step + 1 + epoch * len(train_loader)
+            })
+            step += 1
 
         avg_train_loss = epoch_loss / len(train_loader)
         avg_val_loss = evaluate_loss(val_loader, clip_text_encoder, clip_image_encoder, loss_fn, aligner, device, exclude_cls)

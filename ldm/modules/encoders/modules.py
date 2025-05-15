@@ -305,7 +305,7 @@ class FrozenOpenCLIPImageEmbedder(AbstractEncoder):
         x = x.permute(1, 0, 2)  # LND -> NLD
         
         if exclude_cls:
-            x = x[1:, :, :]
+            x = x[:, 1:, :]  # remove cls token
             
         return x
     
