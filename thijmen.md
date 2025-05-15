@@ -110,3 +110,14 @@ uv run python scripts/txt2img.py \
   --ref_img "data/picasso_style.jpg"
   --ref_blend_weight 0 \
   --aligner_model_path model_best_cosine_flickr30k.pth
+
+uv run python scripts/vcf/train_img2text_aligner.py \
+  --datasets 'flickr30k' \
+  --loss cosine \
+  --batch_size 256 \
+  --epochs 10 \
+  --lr 1e-4 \
+  --device cuda \
+  --wandb_project text-image-aligner \
+  --model_path weights/img2text_aligner/coco_cosine/model.pth \
+  --save_every 2
