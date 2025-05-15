@@ -37,8 +37,8 @@ class ImageToTextAligner(nn.Module):
         """
         super().__init__()
         self.proj = nn.Sequential(
-            nn.LayerNorm(dim),
-            nn.Linear(dim, dim),
+            nn.LayerNorm(1280),
+            nn.Linear(1280, dim),
             nn.ReLU(),
             nn.Linear(dim, dim),
         )
@@ -287,9 +287,11 @@ def train_aligner(
     
     # Initial validation loss
     exclude_cls = args.exclude_cls
-    initial_val_loss = evaluate_loss(val_loader, clip_text_encoder, clip_image_encoder, loss_fn, aligner, device, exclude_cls)
-    print(f"Initial Validation Loss: {initial_val_loss:.4f}")
-    wandb.log({"initial_val_loss": initial_val_loss})
+    
+    # Commented out for now to save time
+    # initial_val_loss = evaluate_loss(val_loader, clip_text_encoder, clip_image_encoder, loss_fn, aligner, device, exclude_cls)
+    # print(f"Initial Validation Loss: {initial_val_loss:.4f}")
+    # wandb.log({"initial_val_loss": initial_val_loss})
     
     optimizer = torch.optim.Adam(aligner.parameters(), lr=args.lr)
     wandb.watch(aligner, log="all")

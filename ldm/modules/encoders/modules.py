@@ -287,48 +287,41 @@ class FrozenOpenCLIPImageEmbedder(AbstractEncoder):
         return z
 
     def extract_patch_features(self, visual_model, img, exclude_cls=True):
-        # Use patch_embed if available, otherwise use conv1 (OpenCLIP ViT)
-        if hasattr(visual_model, "patch_embed"):
-            print("Using patch_embed for patch embedding")
-            x = visual_model.patch_embed(img)  # [B, N_patches, D]
-        elif hasattr(visual_model, "conv1"):
-            print("Using conv1 for patch embedding")
-            # OpenCLIP ViT: patch embedding via conv1
-            x = visual_model.conv1(img)  # [B, C, H, W]
-            B, C, H, W = x.shape
-            x = x.reshape(B, C, H * W).permute(0, 2, 1)  # [B, N_patches, D]
-        else:
-            raise AttributeError("No patch embedding layer found in visual_model")
-
-        # TODO: fix this to use cls token 
-        x = x.permute(0, 2, 1)  # [B, N_patches, D]
-        # cls_token = visual_model.class_embedding
-        # if cls_token.dim() == 1:
-        #     cls_token = cls_token.unsqueeze(0).unsqueeze(0)  # [1, 1, D]
-        # elif cls_token.dim() == 2:
-        #     cls_token = cls_token.unsqueeze(1)  # [1, 1, D]
-        # cls_token = cls_token.expand(x.shape[0], -1, -1)  # [B, 1, D]
-
-        # x = torch.cat((cls_token, x), dim=1)  # [B, N+1, D]
-        x = x + visual_model.positional_embedding
+        # if hasattr(visual_model, "patch_embed"):
+        #     print("Using patch_embed for patch embedding")
+        #     x = visual_model.patch_embed(img)  # [B, N_patches, D]
+        debug = False  
+        
+        x = visual_model.conv1(img)  # [B, C, H, W]
+        B, C, H, W = x.shape
+        if debug: print(f"X shape: {x.shape}")
+        x = x.reshape(B, C, H * W).permute(0, 2, 1)  # [B, N_patches, D]
+        if debug: print(f"X shape: {x.shape}")
+  
+        cls_token = visual_model.class_embedding.view(1, 1, -1) # [1, 1, D]
+        if debug: print(f"CLS token shape: {cls_token.shape}")
+        cls_token = cls_token.expand(x.shape[0], -1, -1)  # [B, 1, D]
+        if debug: print(f"CLS token shape: {cls_token.shape}")
+        x = torch.cat((cls_token, x), dim=1)  # [B, N+1, D]
+        if debug: print(f"X shape: {x.shape}")
+        x = x + visual_model.positional_embedding.unsqueeze(0)  # [B, N_patches, D]
+        if debug: print(f"X shape: {x.shape}")
         x = visual_model.ln_pre(x)
-
+        if debug: print(f"X shape: {x.shape}") 
         # Stop at the penultimate block
         for i, blk in enumerate(visual_model.transformer.resblocks):
             if i == len(visual_model.transformer.resblocks) - 1:
                 break  # skip final block
             x = blk(x)
+        if debug: print(f"X shape: {x.shape}")
 
-        # TODO: include cls token - for now it's excluded since the cls_token is commented out
-        # OPTIONAL: exclude CLS
-        # if exclude_cls:
-        #     x = x[:, 1:, :]  # [B, N_patches, D]
+        if exclude_cls:
+            x = x[:, 1:, :]  # [B, N_patches, D]
+        if debug: print(f"X shape: {x.shape}")
         return x
 
     def encode_with_vision_transformer(self, img, preproject=True, exclude_cls=True):
         img = self.preprocess(img)
-        x = self.model.visual(img)
-
         if preproject:
             x = self.extract_patch_features(self.model.visual, img, exclude_cls=exclude_cls) # [B, N_patches+1, D], pre-projection
         else:
