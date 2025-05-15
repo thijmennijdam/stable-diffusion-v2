@@ -255,7 +255,6 @@ class FrozenOpenCLIPImageEmbedder(AbstractEncoder):
             self.freeze()
         self.layer = layer
         if self.layer == "penultimate":
-            raise NotImplementedError()
             self.layer_idx = 1
 
         self.antialias = antialias
@@ -286,40 +285,30 @@ class FrozenOpenCLIPImageEmbedder(AbstractEncoder):
             z = torch.bernoulli((1. - self.ucg_rate) * torch.ones(z.shape[0], device=z.device))[:, None] * z
         return z
 
-    def extract_patch_features(self, visual_model, img, exclude_cls=True):
-        # if hasattr(visual_model, "patch_embed"):
-        #     print("Using patch_embed for patch embedding")
-        #     x = visual_model.patch_embed(img)  # [B, N_patches, D]
-        debug = False  
-        
-        x = visual_model.conv1(img)  # [B, C, H, W]
-        B, C, H, W = x.shape
-        if debug: print(f"X shape: {x.shape}")
-        x = x.reshape(B, C, H * W).permute(0, 2, 1)  # [B, N_patches, D]
-        if debug: print(f"X shape: {x.shape}")
-  
-        cls_token = visual_model.class_embedding.view(1, 1, -1) # [1, 1, D]
-        if debug: print(f"CLS token shape: {cls_token.shape}")
-        cls_token = cls_token.expand(x.shape[0], -1, -1)  # [B, 1, D]
-        if debug: print(f"CLS token shape: {cls_token.shape}")
-        x = torch.cat((cls_token, x), dim=1)  # [B, N+1, D]
-        if debug: print(f"X shape: {x.shape}")
-        x = x + visual_model.positional_embedding.unsqueeze(0)  # [B, N_patches, D]
-        if debug: print(f"X shape: {x.shape}")
+    def extract_patch_features(self, visual_model, x, exclude_cls=True):
+        x = visual_model.conv1(x)  # shape = [*, width, grid, grid]
+        x = x.reshape(x.shape[0], x.shape[1], -1)  # shape = [*, width, grid ** 2]
+        x = x.permute(0, 2, 1)  # shape = [*, grid ** 2, width]
+        x = torch.cat(
+            [visual_model.class_embedding.to(x.dtype) + torch.zeros(x.shape[0], 1, x.shape[-1], dtype=x.dtype, device=x.device),
+            x], dim=1)  # shape = [*, grid ** 2 + 1, width]
+        x = x + visual_model.positional_embedding.to(x.dtype)
         x = visual_model.ln_pre(x)
-        if debug: print(f"X shape: {x.shape}") 
-        # Stop at the penultimate block
+
+        x = x.permute(1, 0, 2)  # NLD -> LND
+        
         for i, blk in enumerate(visual_model.transformer.resblocks):
-            if i == len(visual_model.transformer.resblocks) - 1:
+            if i == len(self.model.visual.transformer.resblocks) - 1:
                 break  # skip final block
             x = blk(x)
-        if debug: print(f"X shape: {x.shape}")
-
+        
+        x = x.permute(1, 0, 2)  # LND -> NLD
+        
         if exclude_cls:
-            x = x[:, 1:, :]  # [B, N_patches, D]
-        if debug: print(f"X shape: {x.shape}")
+            x = x[1:, :, :]
+            
         return x
-
+    
     def encode_with_vision_transformer(self, img, preproject=True, exclude_cls=True):
         img = self.preprocess(img)
         if preproject:
