@@ -62,7 +62,9 @@ uv run python scripts/txt2img.py \
   --ckpt ./model_checkpoint.ckpt \
   --config configs/stable-diffusion/v2-inference-v.yaml \
   --H 768 --W 768 \
-  --ref_img "data/picasso_style.jpg"
+  --ref_img "data/picasso_style.jpg" \
+  --ref_blend_weight 0 \
+  --aligner_model_path model_best_cosine_flickr30k.pth
 ```
 
 ---
@@ -99,3 +101,12 @@ uv run python scripts/txt2img.py \
 export HF_DATASETS_CACHE="/scratch-shared/holy-triangle/huggingface_datasets2"
 export TRANSFORMERS_CACHE="/scratch-shared/holy-triangle/huggingface_models2"
 export WANDB_API_KEY="a073531c9973b3a17a47501f4c98affd7d2f3c8c"
+
+uv run python scripts/txt2img.py \
+  --prompt "a photo of a cat" \
+  --ckpt /scratch-shared/holy-triangle/weights/stable-diffusion-2-1/v2-1_768-ema-pruned.ckpt \
+  --config configs/stable-diffusion/v2-inference-v.yaml \
+  --H 768 --W 768 \
+  --ref_img "data/picasso_style.jpg"
+  --ref_blend_weight 0 \
+  --aligner_model_path model_best_cosine_flickr30k.pth
