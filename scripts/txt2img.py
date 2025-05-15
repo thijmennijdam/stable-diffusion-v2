@@ -220,7 +220,7 @@ def parse_args():
     parser.add_argument(
         "--ref_blend_weight",
         type=float,
-        default=0.8,
+        default=0.05,
         help="Blend weight for reference image. 1.0 corresponds to full destruction of information in init image. Used to balance the influence of the reference image and the prompt.",
     )
     parser.add_argument(
@@ -245,7 +245,7 @@ def put_watermark(img, wm_encoder=None):
 def main(opt):
     seed_everything(opt.seed)
     # Set project and entity name from environment variables
-    opt.wandb_project = os.getenv("WANDB_PROJECT", "check_different_alphas")
+    opt.wandb_project = os.getenv("WANDB_PROJECT", "stable-diffusion-v2")
     opt.wandb_entity = os.getenv("WANDB_ENTITY", "FoMo-2025")
 
     config = OmegaConf.load(f"{opt.config}")

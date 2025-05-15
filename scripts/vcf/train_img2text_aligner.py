@@ -18,6 +18,7 @@ from sklearn.model_selection import train_test_split
 from typing import List, Tuple
 
 load_dotenv()
+PREPROJECT = True # always true since we fixed it 
 
 if not os.getenv("WANDB_API_KEY"):
     raise ValueError("WANDB_API_KEY is not set in the environment.")
@@ -72,10 +73,11 @@ def cosine_similarity_loss(
         torch.Tensor: Scalar cosine similarity loss.
     """
     # Align image embeddings
-    img_repr = aligner(image_tokens)  # [B, D]
+    img_repr = aligner(image_tokens)  # [B, N_img_tokens, D] (fixed) or [B, D] (old code)
 
     # Mean-pool both
-    # img_repr = aligned_img.mean(dim=1)  # [B, D]  # no need to, as the image embeddings are already projected
+    if PREPROJECT:
+        img_repr = img_repr.mean(dim=1)  # [B, D]
     text_repr = text_tokens.mean(dim=1)  # [B, D]
 
     # Normalize
@@ -106,15 +108,17 @@ def info_nce_loss(
     Returns:
         torch.Tensor: Scalar InfoNCE loss.
     """
-    B, D = image_tokens.shape
+    B, _, D = image_tokens.shape
+    aligned_img = aligner(image_tokens)  # [B, N_img_tokens, D] (fixed) or [B, D] (old code)
 
     # Align and pool
-    aligned_img = aligner(image_tokens) # .mean(dim=1)  # [B, D]
-    text_repr = text_tokens.mean(dim=1)  # [B, D]
+    if PREPROJECT:
+        aligned_img = aligned_img.mean(dim=1)  # [B, D]
+    text_repr = text_tokens.mean(dim=1)              # [B, D]
 
     # Normalize
-    img_norm = F.normalize(aligned_img, dim=1)  # [B, D]
-    text_norm = F.normalize(text_repr, dim=1)  # [B, D]
+    img_norm = F.normalize(aligned_img, dim=1)       # [B, D]
+    text_norm = F.normalize(text_repr, dim=1)        # [B, D]
 
     # Similarity matrix: [B, B]
     logits = img_norm @ text_norm.T / temperature
@@ -123,8 +127,8 @@ def info_nce_loss(
     labels = torch.arange(B, device=logits.device)
 
     # Symmetric InfoNCE loss
-    loss_i2t = F.cross_entropy(logits, labels)  # image -> text
-    loss_t2i = F.cross_entropy(logits.T, labels)  # text -> image
+    loss_i2t = F.cross_entropy(logits, labels)         # image -> text
+    loss_t2i = F.cross_entropy(logits.T, labels)       # text -> image
     return (loss_i2t + loss_t2i) / 2
 
 
@@ -217,7 +221,8 @@ def evaluate_loss(
     clip_image_encoder: nn.Module,
     loss_fn: callable,
     aligner: nn.Module,
-    device: str
+    device: str,
+    exclude_cls: bool = False
 ) -> float:
     """
     Computes average loss over a given dataloader.
@@ -240,7 +245,8 @@ def evaluate_loss(
             images = batch["image"].to(device)
             texts = batch["text"]
             text_features = clip_text_encoder.encode(texts)
-            image_features = clip_image_encoder(images)
+            # NOTE: these are now either [B, Num_img_patches, D] (fixed code) or [B, D] (old code)
+            image_features = clip_image_encoder(images, preproject=PREPROJECT, exclude_cls=exclude_cls)
             loss = loss_fn(image_features, text_features, aligner)
             total_loss += loss.item()
     aligner.train()
@@ -280,7 +286,8 @@ def train_aligner(
         aligner.load_state_dict(torch.load(args.resume_from, map_location=device))
     
     # Initial validation loss
-    initial_val_loss = evaluate_loss(val_loader, clip_text_encoder, clip_image_encoder, loss_fn, aligner, device)
+    exclude_cls = args.exclude_cls
+    initial_val_loss = evaluate_loss(val_loader, clip_text_encoder, clip_image_encoder, loss_fn, aligner, device, exclude_cls)
     print(f"Initial Validation Loss: {initial_val_loss:.4f}")
     wandb.log({"initial_val_loss": initial_val_loss})
     
@@ -298,7 +305,7 @@ def train_aligner(
             images = batch["image"].to(device)
             texts = batch["text"]
             text_features = clip_text_encoder.encode(texts)
-            image_features = clip_image_encoder(images)
+            image_features = clip_image_encoder(images,  preproject=PREPROJECT, exclude_cls=exclude_cls)
             loss = loss_fn(image_features, text_features, aligner)
             optimizer.zero_grad()
             loss.backward()
@@ -307,7 +314,7 @@ def train_aligner(
             progress.set_postfix(loss=loss.item())
 
         avg_train_loss = epoch_loss / len(train_loader)
-        avg_val_loss = evaluate_loss(val_loader, clip_text_encoder, clip_image_encoder, loss_fn, aligner, device)
+        avg_val_loss = evaluate_loss(val_loader, clip_text_encoder, clip_image_encoder, loss_fn, aligner, device, exclude_cls)
         print(f"Epoch {epoch + 1}, Train Loss: {avg_train_loss:.4f}, Val Loss: {avg_val_loss:.4f}")
         wandb.log({"epoch": epoch + 1, "train_loss": avg_train_loss, "val_loss": avg_val_loss})
 
@@ -329,7 +336,7 @@ def train_aligner(
 
     # Load and evaluate best model on test set
     aligner.load_state_dict(torch.load(best_model_path))
-    final_test_loss = evaluate_loss(test_loader, clip_text_encoder, clip_image_encoder, loss_fn, aligner, args.device)
+    final_test_loss = evaluate_loss(test_loader, clip_text_encoder, clip_image_encoder, loss_fn, aligner, device, exclude_cls)
     print(f"Best Model Test Loss: {final_test_loss:.4f}")
     wandb.log({"final_test_loss": final_test_loss})
 
@@ -355,11 +362,16 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--model_path", type=str, default="weights/img2text_aligner/model.pth")
     parser.add_argument("--save_every", type=int, default=5, help="Save model every N epochs")
     parser.add_argument("--resume_from", type=str, default=None, help="Path to a pretrained aligner checkpoint")
+    parser.add_argument("--exclude_cls", action="store_true", help="Exclude CLS token from image features")
     return parser.parse_args()
 
 
 if __name__ == "__main__":
     args = parse_args()
+    # print args in a readable format
+    print("Parsed arguments:")
+    for arg, value in vars(args).items():
+        print(f"{arg}: {value}")
     if not os.getenv("WANDB_API_KEY"):
         raise ValueError("WANDB_API_KEY is not set in the environment.")
     wandb.login(key=os.getenv("WANDB_API_KEY"))
