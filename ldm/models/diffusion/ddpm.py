@@ -709,8 +709,10 @@ class LatentDiffusion(DDPM):
 
             # Extract and normalize CLIP image features
             image_features = self.clip_model(ref_image) # [B, D]
-            image_features = self.image_to_text_aligner(image_features) # [B, D]
-
+            image_features = self.image_to_text_aligner(image_features).squeeze(0) # [N_patch, D]
+            image_features = image_features.mean(dim=0) # [D]
+            print(f"Image features shape: {image_features.shape}")
+            print(f"Text features shape: {c.shape}")
             # Blend text and image features
             alpha = self.ref_blend_weight
             c = (1 - alpha) * c + alpha * image_features

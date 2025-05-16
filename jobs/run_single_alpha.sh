@@ -9,7 +9,18 @@
 echo "Running job for alpha=${ALPHA} in $ROOT_DIR"
 
 cd "$ROOT_DIR"
-source .venv/bin/activate
+
+# When using UV on a100
+# source .venv/bin/activate
+
+module load 2023
+module load Anaconda3/2023.07-2
+module load CUDA/12.1.1
+
+# conda env create -f environment.yaml
+source activate ldmv2
+# conda install pytorch torchvision=0.18.1 pytorch-cuda=12.1 -c pytorch -c nvidia -y
+
 
 uv run python scripts/txt2img.py \
   --prompt "$PROMPT" \
