@@ -387,16 +387,15 @@ def main(opt):
             for _ in range(3):
                 x_samples_ddim = model.decode_first_stage(samples_ddim)
 
+    def clean(s):
+        return s.replace(" ", "_").replace("/", "_").replace("-", "_").lower()
 
-    def clean_string(s):
-        return s.replace(" ", "_").replace(",", "").replace(".", "").lower()
-
-    short_prompt = clean_string(opt.prompt)[:30]
-    ref_mode = f"ref{opt.ref_blend_weight}" if opt.ref_img else "noref"
-    aligner_name = os.path.splitext(os.path.basename(opt.aligner_model_path))[0] if opt.aligner_model_path else "noaligner"
-    timestamp = datetime.now().strftime("%d%m_%H%M%S")
-
-    wandb_run_name = f"{short_prompt}_{ref_mode}_{aligner_name}"
+    wandb_run_name = (
+        f"alpha={opt.ref_blend_weight:.3f}"
+        f"|prompt={clean(opt.prompt)[:30]}"
+        f"|ref={os.path.splitext(os.path.basename(opt.ref_img))[0] if opt.ref_img else 'noref'}"
+        f"|aligner={os.path.splitext(os.path.basename(opt.aligner_model_path))[0]}"
+    )
 
     wandb.init(
         project=opt.wandb_project, 

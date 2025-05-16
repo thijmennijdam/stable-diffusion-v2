@@ -121,3 +121,13 @@ uv run python scripts/vcf/train_img2text_aligner.py \
   --wandb_project text-image-aligner \
   --model_path weights/img2text_aligner/coco_cosine/model.pth \
   --save_every 2
+
+
+uv run python scripts/txt2img.py \
+  --prompt "a photo of a cat" \
+  --ckpt "model_checkpoint.ckpt" \
+  --config "configs/stable-diffusion/v2-inference-v.yaml" \
+  --H 768 --W 768 \
+  --ref_img "data/cat.jpg" \
+  --ref_blend_weight 0 \
+  --aligner_model_path "/scratch-shared/holy-triangle/weights/img2text_aligner_fixed/flickr30k_cosine/model_best.pth"

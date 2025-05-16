@@ -6,17 +6,17 @@ class ImageToTextAligner(nn.Module):
     using a small feedforward network with normalization and ReLU activation.
     """
 
-    def __init__(self, dim=1024):
+    def __init__(self, input_dim=1280, output_dim=1024):
         """
         Args:
             dim (int): Dimensionality of both image and text embeddings.
         """
         super().__init__()
         self.proj = nn.Sequential(
-            nn.LayerNorm(dim),
-            nn.Linear(dim, dim),
+            nn.LayerNorm(input_dim),
+            nn.Linear(input_dim, output_dim),
             nn.ReLU(),
-            nn.Linear(dim, dim),
+            nn.Linear(output_dim, output_dim),
         )
 
     def forward(self, x):

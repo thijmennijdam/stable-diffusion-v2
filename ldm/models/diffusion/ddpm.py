@@ -603,7 +603,7 @@ class LatentDiffusion(DDPM):
             model_path (str): Path to the .pth file containing the saved model weights.
         """
         print(f"Loading ImageToTextAligner from {model_path}")
-        self.image_to_text_aligner = ImageToTextAligner(dim=1024).to(self.device)
+        self.image_to_text_aligner = ImageToTextAligner(output_dim=1024).to(self.device)
         if os.path.isfile(model_path):
             state_dict = torch.load(model_path, map_location=self.device)
             self.image_to_text_aligner.load_state_dict(state_dict)
