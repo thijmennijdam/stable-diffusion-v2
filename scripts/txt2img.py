@@ -397,11 +397,19 @@ def main(opt):
         f"|aligner={'/'.join(opt.aligner_model_path.split('/')[-3:])}"
     )
 
+    # TODO: for now hard coded, to be fixed
+    loss = "cosine" if "cosine" in opt.aligner_model_path else "infonce"
+    exclude_cls = True
+
     wandb.init(
-        project=opt.wandb_project, 
-        entity=opt.wandb_entity,
-        name=wandb_run_name,
-        config=vars(opt)
+    project=opt.wandb_project, 
+    entity=opt.wandb_entity,
+    name=wandb_run_name,
+    config=vars(opt),
+        tags=[
+            f"loss={loss}",
+            f"exclude_cls={exclude_cls}",
+        ]
     )
 
     precision_scope = autocast if opt.precision=="autocast" or opt.bf16 else nullcontext
