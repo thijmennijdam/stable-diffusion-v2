@@ -394,7 +394,7 @@ def main(opt):
         f"alpha={opt.ref_blend_weight:.3f}"
         f"|prompt={clean(opt.prompt)[:30]}"
         f"|ref={os.path.splitext(os.path.basename(opt.ref_img))[0] if opt.ref_img else 'noref'}"
-        f"|aligner={os.path.splitext(os.path.basename(opt.aligner_model_path))[0]}"
+        f"|aligner={'/'.join(opt.aligner_model_path.split('/')[-3:])}"
     )
 
     wandb.init(
