@@ -255,7 +255,6 @@ class FrozenOpenCLIPImageEmbedder(AbstractEncoder):
             self.freeze()
         self.layer = layer
         if self.layer == "penultimate":
-            raise NotImplementedError()
             self.layer_idx = 1
 
         self.antialias = antialias
@@ -279,16 +278,43 @@ class FrozenOpenCLIPImageEmbedder(AbstractEncoder):
         for param in self.parameters():
             param.requires_grad = False
 
-    @autocast
-    def forward(self, image, no_dropout=False):
-        z = self.encode_with_vision_transformer(image)
+    # @autocast removed this
+    def forward(self, image, no_dropout=False, preproject=True, exclude_cls=True):
+        z = self.encode_with_vision_transformer(image, preproject=preproject, exclude_cls=exclude_cls)
         if self.ucg_rate > 0. and not no_dropout:
             z = torch.bernoulli((1. - self.ucg_rate) * torch.ones(z.shape[0], device=z.device))[:, None] * z
         return z
 
-    def encode_with_vision_transformer(self, img):
+    def extract_patch_features(self, visual_model, x, exclude_cls=True):
+        x = visual_model.conv1(x)  # shape = [*, width, grid, grid]
+        x = x.reshape(x.shape[0], x.shape[1], -1)  # shape = [*, width, grid ** 2]
+        x = x.permute(0, 2, 1)  # shape = [*, grid ** 2, width]
+        x = torch.cat(
+            [visual_model.class_embedding.to(x.dtype) + torch.zeros(x.shape[0], 1, x.shape[-1], dtype=x.dtype, device=x.device),
+            x], dim=1)  # shape = [*, grid ** 2 + 1, width]
+        x = x + visual_model.positional_embedding.to(x.dtype)
+        x = visual_model.ln_pre(x)
+
+        x = x.permute(1, 0, 2)  # NLD -> LND
+        
+        for i, blk in enumerate(visual_model.transformer.resblocks):
+            if i == len(self.model.visual.transformer.resblocks) - 1:
+                break  # skip final block
+            x = blk(x)
+        
+        x = x.permute(1, 0, 2)  # LND -> NLD
+        
+        if exclude_cls:
+            x = x[:, 1:, :]  # remove cls token
+            
+        return x
+    
+    def encode_with_vision_transformer(self, img, preproject=True, exclude_cls=True):
         img = self.preprocess(img)
-        x = self.model.visual(img)
+        if preproject:
+            x = self.extract_patch_features(self.model.visual, img, exclude_cls=exclude_cls) # [B, N_patches+1, D], pre-projection
+        else:
+            x = self.model.visual(img)
         return x
 
     def encode(self, text):

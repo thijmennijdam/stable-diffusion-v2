@@ -59,9 +59,12 @@ module load CUDA/11.7.0
 ```bash
 uv run python scripts/txt2img.py \
   --prompt "a professional photograph of an astronaut riding a horse" \
-  --ckpt /scratch-shared/holy-triangle/weights/stable-diffusion-2-1/v2-1_768-ema-pruned.ckpt \
+  --ckpt ./model_checkpoint.ckpt \
   --config configs/stable-diffusion/v2-inference-v.yaml \
-  --H 768 --W 768
+  --H 768 --W 768 \
+  --ref_img "data/picasso_style.jpg" \
+  --ref_blend_weight 0 \
+  --aligner_model_path model_best_cosine_flickr30k.pth
 ```
 
 ---
@@ -93,3 +96,38 @@ uv run python scripts/txt2img.py \
   --H 768 --W 768 \
   --ref_img "data/picasso_style.jpg"
 ```
+
+
+export HF_DATASETS_CACHE="/scratch-shared/holy-triangle/huggingface_datasets2"
+export TRANSFORMERS_CACHE="/scratch-shared/holy-triangle/huggingface_models2"
+export WANDB_API_KEY="a073531c9973b3a17a47501f4c98affd7d2f3c8c"
+
+uv run python scripts/txt2img.py \
+  --prompt "a photo of a cat" \
+  --ckpt /scratch-shared/holy-triangle/weights/stable-diffusion-2-1/v2-1_768-ema-pruned.ckpt \
+  --config configs/stable-diffusion/v2-inference-v.yaml \
+  --H 768 --W 768 \
+  --ref_img "data/picasso_style.jpg"
+  --ref_blend_weight 0 \
+  --aligner_model_path model_best_cosine_flickr30k.pth
+
+uv run python scripts/vcf/train_img2text_aligner.py \
+  --datasets 'flickr30k' \
+  --loss cosine \
+  --batch_size 256 \
+  --epochs 10 \
+  --lr 1e-4 \
+  --device cuda \
+  --wandb_project text-image-aligner \
+  --model_path weights/img2text_aligner/coco_cosine/model.pth \
+  --save_every 2
+
+
+uv run python scripts/txt2img.py \
+  --prompt "a photo of a cat" \
+  --ckpt "model_checkpoint.ckpt" \
+  --config "configs/stable-diffusion/v2-inference-v.yaml" \
+  --H 768 --W 768 \
+  --ref_img "data/cat.jpg" \
+  --ref_blend_weight 0 \
+  --aligner_model_path "/scratch-shared/holy-triangle/weights/img2text_aligner_fixed/flickr30k_cosine/model_best.pth"

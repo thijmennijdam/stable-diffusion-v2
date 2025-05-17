@@ -208,7 +208,7 @@ def parse_args():
         "--log_steps",
         nargs="+",
         type=int,
-        default=[0, 10, 25, -1],  # -1 means final step
+        default=[0, 10, 20, 30, 40, -1],  # -1 means final step
         help="Steps to log intermediate results at"
     )
     parser.add_argument(
@@ -220,8 +220,14 @@ def parse_args():
     parser.add_argument(
         "--ref_blend_weight",
         type=float,
-        default=0.8,
+        default=0.05,
         help="Blend weight for reference image. 1.0 corresponds to full destruction of information in init image. Used to balance the influence of the reference image and the prompt.",
+    )
+    parser.add_argument(
+        "--aligner_model_path",
+        type=str,
+        default="weights/img2text_aligner/coco_cosine/model_best.pth",
+        help="Path to the aligner model. If not specified, the default model will be used.",
     )
     
     opt = parser.parse_args()
@@ -252,6 +258,7 @@ def main(opt):
         model.set_blend_weight(opt.ref_blend_weight)
         model.set_use_ref_img(True)
         model.create_ref_img_encoder()
+        model.create_image_to_text_aligner(opt.aligner_model_path)
 
     if opt.plms:
         sampler = PLMSSampler(model, device=device)
@@ -304,7 +311,8 @@ def main(opt):
             ref_image = (ref_image - 0.5) * 2           
         else:
             print(f"Warning: Reference image not found at {opt.ref_img}. Skipping.")
-
+    else:
+        ref_image = None
     
     if opt.torchscript or opt.ipex:
         transformer = model.cond_stage_model.model
@@ -379,12 +387,29 @@ def main(opt):
             for _ in range(3):
                 x_samples_ddim = model.decode_first_stage(samples_ddim)
 
-    wandb_run_name = f"txt2img-{datetime.now().strftime('%d-%m-%Y_%H-%M-%S')}"
+    def clean(s):
+        return s.replace(" ", "_").replace("/", "_").replace("-", "_").lower()
+
+    wandb_run_name = (
+        f"alpha={opt.ref_blend_weight:.3f}"
+        f"|prompt={clean(opt.prompt)[:30]}"
+        f"|ref={os.path.splitext(os.path.basename(opt.ref_img))[0] if opt.ref_img else 'noref'}"
+        f"|aligner={'/'.join(opt.aligner_model_path.split('/')[-3:])}"
+    )
+
+    # TODO: for now hard coded, to be fixed
+    loss = "cosine" if "cosine" in opt.aligner_model_path else "infonce"
+    exclude_cls = True
+
     wandb.init(
-        project=opt.wandb_project, 
-        entity=opt.wandb_entity,
-        name=wandb_run_name,
-        config=vars(opt)
+    project=opt.wandb_project, 
+    entity=opt.wandb_entity,
+    name=wandb_run_name,
+    config=vars(opt),
+        tags=[
+            f"loss={loss}",
+            f"exclude_cls={exclude_cls}",
+        ]
     )
 
     precision_scope = autocast if opt.precision=="autocast" or opt.bf16 else nullcontext
