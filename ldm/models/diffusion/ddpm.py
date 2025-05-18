@@ -28,7 +28,6 @@ from ldm.modules.diffusionmodules.util import make_beta_schedule, extract_into_t
 from ldm.models.diffusion.ddim import DDIMSampler
 from ldm.modules.encoders.modules import FrozenOpenCLIPImageEmbedder
 from ldm.modules.vcf.aligner import ImageToTextAligner
-from ldm.modules.diffusionmodules.util import timestep_embedding
 
 __conditioning_keys__ = {'concat': 'c_concat',
                          'crossattn': 'c_crossattn',
@@ -299,20 +298,24 @@ class DDPM(pl.LightningModule):
         """
         Ensures tensor dimensions match before computation
         """
-        if isinstance(v, tuple):
-            v = v[0]  # Take first element if it's a tuple
+        # if isinstance(v, tuple):
+        #     v = v[0]  # Take first element if it's a tuple
         
-        alphas = extract_into_tensor(self.alphas_cumprod, t, x_t.shape)
-        sqrt_alphas = extract_into_tensor(self.sqrt_alphas_cumprod, t, x_t.shape)
-        sqrt_one_minus_alphas = extract_into_tensor(self.sqrt_one_minus_alphas_cumprod, t, x_t.shape)
+        # alphas = extract_into_tensor(self.alphas_cumprod, t, x_t.shape)
+        # sqrt_alphas = extract_into_tensor(self.sqrt_alphas_cumprod, t, x_t.shape)
+        # sqrt_one_minus_alphas = extract_into_tensor(self.sqrt_one_minus_alphas_cumprod, t, x_t.shape)
 
-        # Ensure v has the same batch size as x_t
-        if v.shape[0] != x_t.shape[0]:
-            v = v[:x_t.shape[0]]
+        # # Ensure v has the same batch size as x_t
+        # if v.shape[0] != x_t.shape[0]:
+        #     v = v[:x_t.shape[0]]
 
-        # Compute epsilon
-        eps = sqrt_alphas * v + sqrt_one_minus_alphas * x_t
-        return eps
+        # # Compute epsilon
+        # eps = sqrt_alphas * v + sqrt_one_minus_alphas * x_t
+        # return eps
+        return (
+                    extract_into_tensor(self.sqrt_alphas_cumprod, t, x_t.shape) * v +
+                    extract_into_tensor(self.sqrt_one_minus_alphas_cumprod, t, x_t.shape) * x_t
+            )
 
     def q_posterior(self, x_start, x_t, t):
         posterior_mean = (
@@ -711,6 +714,7 @@ class LatentDiffusion(DDPM):
 
     def get_learned_conditioning(self, c, ref_image=None, store_both=False):
         # Handle input conditioning
+        #NOTE: Necessary
         if isinstance(c, (list, tuple)): # if c is a list or tuple, convert to string
             c = c[0] if len(c) > 0 else ""
         elif torch.is_tensor(c): # if c is a tensor, convert to string
@@ -742,14 +746,15 @@ class LatentDiffusion(DDPM):
             print(f"Text features shape: {c.shape}")
 
             # Ensure image features match the batch dimension of text features
-            if len(image_features.shape) == 1:
-                image_features = image_features.unsqueeze(0)
-            if c.shape[0] > image_features.shape[0]:
-                image_features = image_features.repeat(c.shape[0], 1)
+            #NOTE: Likely redundant
+            # if len(image_features.shape) == 1:
+            #     image_features = image_features.unsqueeze(0)
+            # if c.shape[0] > image_features.shape[0]:
+            #     image_features = image_features.repeat(c.shape[0], 1)
 
             # Blend text and image features
             alpha = self.ref_blend_weight
-            c = (1 - alpha) * c + alpha * image_features.to(c.device)
+            c = (1 - alpha) * c + alpha * image_features
 
         ## --------- End of Visual Concept Fusion implementation --------- ##
         if store_both:

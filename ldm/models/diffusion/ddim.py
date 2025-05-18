@@ -51,7 +51,25 @@ class DDIMSampler(object):
             (1 - self.alphas_cumprod_prev) / (1 - self.alphas_cumprod) * (
                         1 - self.alphas_cumprod / self.alphas_cumprod_prev))
         self.register_buffer('ddim_sigmas_for_original_num_steps', sigmas_for_original_sampling_steps)
-
+    
+    def _expand_tensor(self, tensor, batch_size):
+        if tensor is None:
+            return None
+        
+        if isinstance(tensor, list):
+            return [self._expand_tensor(t, batch_size) for t in tensor]
+        
+        if not isinstance(tensor, torch.Tensor):
+            return tensor
+        
+        if len(tensor.shape) >= 2:
+            if tensor.shape[0] != batch_size:
+                # Repeat the tensor to match batch size
+                repeats = [1] * len(tensor.shape)
+                repeats[0] = batch_size
+                tensor = tensor.repeat(*repeats)
+        return tensor
+    
     @torch.no_grad()
     def sample(self,
                S,
@@ -80,29 +98,66 @@ class DDIMSampler(object):
                **kwargs
                ):
                
+        # if conditioning is not None:
+        #     if isinstance(conditioning, dict):
+        #         ctmp = conditioning[list(conditioning.keys())[0]]
+        #         while isinstance(ctmp, list): ctmp = ctmp[0]
+        #         cbs = ctmp.shape[0]
+        #         if cbs != batch_size:
+        #             print(f"Warning: Got {cbs} conditionings but batch-size is {batch_size}")
+
+        #     elif isinstance(conditioning, list):
+        #         for ctmp in conditioning:
+        #             if ctmp.shape[0] != batch_size:
+        #                 print(f"Warning: Got {cbs} conditionings but batch-size is {batch_size}")
+
+        #     else:
+        #         if conditioning.shape[0] != batch_size:
+        #             conditioning = conditioning.repeat(batch_size // conditioning.shape[0] + (1 if batch_size % conditioning.shape[0] else 0), 1, 1)[:batch_size]
+        #             print(f"Warning: Got {conditioning.shape[0]} conditionings but batch-size is {batch_size}, DID NOT ATTEMPT to repeat conditioning to match batch-size")
+        
         if conditioning is not None:
-            if isinstance(conditioning, dict):
-                # ctmp = conditioning[list(conditioning.keys())[0]]
-                # while isinstance(ctmp, list): ctmp = ctmp[0]
-                # cbs = ctmp.shape[0]
-                cbs = conditioning[list(conditioning.keys())[0]].shape[0]
+            # Standardize conditioning to match batch size
+            conditioning = self._expand_tensor(conditioning, batch_size)
+            if isinstance(conditioning, dict) or isinstance(conditioning, list):
+                # Check shapes for warning only
+                if isinstance(conditioning, dict):
+                    ctmp = conditioning[list(conditioning.keys())[0]]
+                    while isinstance(ctmp, list): ctmp = ctmp[0]
+                    cbs = ctmp.shape[0]
+                else:  # list
+                    for ctmp in conditioning:
+                        cbs = ctmp.shape[0]
+                        break
+                
                 if cbs != batch_size:
                     print(f"Warning: Got {cbs} conditionings but batch-size is {batch_size}")
-
-            # elif isinstance(conditioning, list):
-            #     for ctmp in conditioning:
-            #         if ctmp.shape[0] != batch_size:
-            #             print(f"Warning: Got {cbs} conditionings but batch-size is {batch_size}")
-
-            # else:
-                    for k in conditioning.keys():
-                        if isinstance(conditioning[k], torch.Tensor):
-                            conditioning[k] = conditioning[k].repeat(batch_size // cbs + (1 if batch_size % cbs else 0), 1, 1)[:batch_size]
-            elif isinstance(conditioning, torch.Tensor):
-                if conditioning.shape[0] != batch_size:
-                    conditioning = conditioning.repeat(batch_size // conditioning.shape[0] + (1 if batch_size % conditioning.shape[0] else 0), 1, 1)[:batch_size]
-                    print(f"Warning: Got {conditioning.shape[0]} conditionings but batch-size is {batch_size}, attempted to repeat conditioning to match batch-size")
         
+        # ## --------- Visual Concept Fusion implementation --------- ##
+        # # Check if model supports timestep conditioning and if we should use it
+        # use_timestep_cond = timestep_conditioning and hasattr(self.model, 'timestep_conditioning_start') and hasattr(self.model, 'timestep_conditioning_end')
+        
+        # text_only_cond = None
+        # blended_cond = None
+        
+        # if use_timestep_cond and conditioning is not None:
+        #     if hasattr(self.model, 'get_learned_conditioning'):
+        #         # Get both conditionings
+        #         text_only_cond, blended_cond = self.model.get_learned_conditioning(
+        #             conditioning, ref_image=kwargs.get('ref_image', None), store_both=True
+        #         )
+                
+        #         # Ensure proper batch size for both conditionings
+        #         if isinstance(text_only_cond, torch.Tensor):
+        #             if text_only_cond.shape[0] != batch_size:
+        #                 text_only_cond = text_only_cond.repeat(batch_size // text_only_cond.shape[0] + (1 if batch_size % text_only_cond.shape[0] else 0), 1, 1)[:batch_size]
+                
+        #         if isinstance(blended_cond, torch.Tensor):
+        #             if blended_cond.shape[0] != batch_size:
+        #                 blended_cond = blended_cond.repeat(batch_size // blended_cond.shape[0] + (1 if batch_size % blended_cond.shape[0] else 0), 1, 1)[:batch_size]
+        
+        # ## --------- End of Visual Concept Fusion implementation --------- ##
+
         ## --------- Visual Concept Fusion implementation --------- ##
         # Check if model supports timestep conditioning and if we should use it
         use_timestep_cond = timestep_conditioning and hasattr(self.model, 'timestep_conditioning_start') and hasattr(self.model, 'timestep_conditioning_end')
@@ -117,15 +172,9 @@ class DDIMSampler(object):
                     conditioning, ref_image=kwargs.get('ref_image', None), store_both=True
                 )
                 
-                # Ensure proper batch size for both conditionings
-                if isinstance(text_only_cond, torch.Tensor):
-                    if text_only_cond.shape[0] != batch_size:
-                        text_only_cond = text_only_cond.repeat(batch_size // text_only_cond.shape[0] + (1 if batch_size % text_only_cond.shape[0] else 0), 1, 1)[:batch_size]
-                
-                if isinstance(blended_cond, torch.Tensor):
-                    if blended_cond.shape[0] != batch_size:
-                        blended_cond = blended_cond.repeat(batch_size // blended_cond.shape[0] + (1 if batch_size % blended_cond.shape[0] else 0), 1, 1)[:batch_size]
-        
+                # Ensure proper batch size for both conditionings using our helper method
+                text_only_cond = self._expand_tensor(text_only_cond, batch_size)
+                blended_cond = self._expand_tensor(blended_cond, batch_size)
         ## --------- End of Visual Concept Fusion implementation --------- ##
         
         self.make_schedule(ddim_num_steps=S, ddim_eta=eta, verbose=verbose)
@@ -184,8 +233,8 @@ class DDIMSampler(object):
 
 
         ## --------- Visual Concept Fusion implementation --------- ##
-        total_steps = timesteps if ddim_use_original_steps else timesteps.shape[0]
         # Calculate which timesteps to use image conditioning
+        start_step = end_step = None
         if use_timestep_cond and text_only_cond is not None and blended_cond is not None:
             # Set image conditioning steps to True for timesteps where we have image conditioning
             start_step = int(self.model.timestep_conditioning_start * total_steps)
@@ -260,17 +309,21 @@ class DDIMSampler(object):
             x_in = torch.cat([x] * 2)
             t_in = torch.cat([t] * 2)
             
+            # # Ensure conditioning tensors have correct batch size
+            # if isinstance(unconditional_conditioning, dict):
+            #     uc = {key: self._expand_tensor(tensor, b) for key, tensor in unconditional_conditioning.items()}
+            # else:
+            #     uc = self._expand_tensor(unconditional_conditioning, b)
+            
+            # if isinstance(c, dict):
+            #     c = {key: self._expand_tensor(tensor, b) for key, tensor in c.items()}
+            # else:
+            #     c = self._expand_tensor(c, b)
+            
             # Ensure conditioning tensors have correct batch size
-            if isinstance(unconditional_conditioning, dict):
-                uc = {key: self._expand_tensor(tensor, b) for key, tensor in unconditional_conditioning.items()}
-            else:
-                uc = self._expand_tensor(unconditional_conditioning, b)
-            
-            if isinstance(c, dict):
-                c = {key: self._expand_tensor(tensor, b) for key, tensor in c.items()}
-            else:
-                c = self._expand_tensor(c, b)
-            
+            uc = self._expand_tensor(unconditional_conditioning, b)
+            c = self._expand_tensor(c, b)
+
             # Create the conditioning input
             if timestep_cond is not None:
                 c_in = {
@@ -330,24 +383,6 @@ class DDIMSampler(object):
         x_prev = a_prev.sqrt() * pred_x0 + dir_xt + noise
         return x_prev, pred_x0
 
-    def _expand_tensor(self, tensor, batch_size):
-        if tensor is None:
-            return None
-        
-        if isinstance(tensor, list):
-            return [self._expand_tensor(t, batch_size) for t in tensor]
-        
-        if not isinstance(tensor, torch.Tensor):
-            return tensor
-        
-        if len(tensor.shape) >= 2:
-            if tensor.shape[0] != batch_size:
-                # Repeat the tensor to match batch size
-                repeats = [1] * len(tensor.shape)
-                repeats[0] = batch_size
-                tensor = tensor.repeat(*repeats)
-        return tensor
-
     @torch.no_grad()
     def encode(self, x0, c, t_enc, use_original_steps=False, return_intermediates=None,
                unconditional_guidance_scale=1.0, unconditional_conditioning=None, callback=None):
@@ -372,6 +407,15 @@ class DDIMSampler(object):
                 noise_pred = self.model.apply_model(x_next, t, c)
             else:
                 assert unconditional_conditioning is not None
+                
+                # # Ensure conditioning tensors have correct batch size
+                # uc = self._expand_tensor(unconditional_conditioning, x0.shape[0])
+                # c = self._expand_tensor(c, x0.shape[0])
+                
+                # x_in = torch.cat((x_next, x_next))
+                # t_in = torch.cat((t, t))
+                # c_in = torch.cat((uc, c))
+
                 e_t_uncond, noise_pred = torch.chunk(
                     self.model.apply_model(torch.cat((x_next, x_next)), torch.cat((t, t)),
                                            torch.cat((unconditional_conditioning, c))), 2)
@@ -424,6 +468,12 @@ class DDIMSampler(object):
 
         iterator = tqdm(time_range, desc='Decoding image', total=total_steps)
         x_dec = x_latent
+        
+        # # Ensure conditioning tensors have correct batch size
+        # cond = self._expand_tensor(cond, x_latent.shape[0])
+        # uc = self._expand_tensor(unconditional_conditioning, x_latent.shape[0])
+            
+        
         for i, step in enumerate(iterator):
             index = total_steps - i - 1
             ts = torch.full((x_latent.shape[0],), step, device=x_latent.device, dtype=torch.long)
