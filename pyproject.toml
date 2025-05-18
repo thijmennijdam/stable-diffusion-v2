@@ -27,6 +27,7 @@ dependencies = [
     "datasets>=3.1.0",
     "matplotlib>=3.7.5",
     "mkl>=2025.1.0",
+    "scikit-image>=0.19.3",
 ]
 
 [build-system]

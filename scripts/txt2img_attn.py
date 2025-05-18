@@ -23,11 +23,14 @@ from torchvision import transforms
 
 from sklearn.manifold import TSNE
 import matplotlib.pyplot as plt
+from skimage.measure import block_reduce
+
 
 from PIL import Image
 
 # -- Update for visualization of attention maps --
 from ldm.modules.attention import BasicTransformerBlock
+
 
 # ---------- hooks ----------
 class AttnStore:
@@ -58,9 +61,13 @@ class AttnStore:
 
 
 
-def build_heatmaps(store, H, W, token_idx=None, h8=None, w8=None):
+from skimage.measure import block_reduce
+
+from skimage.measure import block_reduce
+
+def build_heatmaps(store, H, W, token_idx=None, h8=4, w8=4):
     """
-    Builds a per-patch attention heatmap, safely reshaped and upsampled to (H, W).
+    Builds a per-patch attention heatmap, aggregated to (h8, w8) and upsampled to (H, W).
     """
     if not store.store:
         raise ValueError("No attention maps collected!")
@@ -73,23 +80,19 @@ def build_heatmaps(store, H, W, token_idx=None, h8=None, w8=None):
     else:
         raise ValueError(f"Unexpected attention map shape: {t.shape}")
 
-    # Infer grid size
+    # Infer patch grid size (input is usually 64x64 or 96x96)
     Q = attn_patch.shape[0]
-    if h8 is None or w8 is None:
-        h8 = w8 = int(np.sqrt(Q))
-        if h8 * w8 != Q:
-            raise ValueError(f"Cannot infer square grid for Q={Q}. Set h8/w8 manually.")
-
-    # Convert to numpy, correct dtype
+    patch_grid_size = int(np.sqrt(Q))
+    if patch_grid_size * patch_grid_size != Q:
+        raise ValueError(f"Cannot infer square grid for Q={Q}.")
     heat = attn_patch.detach().cpu().numpy().astype(np.float32)
-    # Remove NaN/Inf (replace with 0)
     heat = np.nan_to_num(heat, nan=0.0, posinf=0.0, neginf=0.0)
+    heat = heat.reshape((patch_grid_size, patch_grid_size))  # Now shape (patch_grid_size, patch_grid_size)
 
-    # Reshape to (h8, w8) patch grid
-    try:
-        heat = heat.reshape((h8, w8))
-    except Exception as e:
-        raise RuntimeError(f"Can't reshape attention vector of length {Q} to grid ({h8},{w8})") from e
+    # Block-average to h8 x w8 (e.g. 4x4)
+    block_h = patch_grid_size // h8
+    block_w = patch_grid_size // w8
+    heat = block_reduce(heat, block_size=(block_h, block_w), func=np.mean)  # Shape (h8, w8)
 
     # Normalize
     min_val, max_val = np.nanmin(heat), np.nanmax(heat)
@@ -98,11 +101,12 @@ def build_heatmaps(store, H, W, token_idx=None, h8=None, w8=None):
     else:
         heat = np.zeros_like(heat, dtype=np.float32)
 
-    # Upsample to image size (float32, no NaNs/Infs)
-    heat = heat.astype(np.float32)
-    heat = cv2.resize(heat, (W, H), interpolation=cv2.INTER_CUBIC)
+    # Upsample to image size as large sharp patches
+    heat = cv2.resize(heat, (W, H), interpolation=cv2.INTER_NEAREST)
     heat = np.clip(heat, 0, 1)
     return heat
+
+
 
 def overlay(img_pil, heat, alpha=0.6):
     """
@@ -615,11 +619,19 @@ def main(opt):
                         
                         try:
                             # build heat-maps once for this prompt batch
-                            heat = build_heatmaps(attn, opt.H, opt.W, token_idx=None, h8=opt.H//8, w8=opt.W//8)
+                            heat = build_heatmaps(attn, opt.H, opt.W, token_idx=None, h8=opt.H // 8, w8=opt.W // 8)
+
 
 
                             overlay_img = overlay(img, heat)
                             overlay_img.save(os.path.join(sample_path, f"{base_count:05}_attn.png"))
+                            
+                            heat2 = build_heatmaps(attn, opt.H, opt.W, token_idx=None, h8=4, w8=4)
+
+
+
+                            overlay_img2 = overlay(img, heat2)
+                            overlay_img2.save(os.path.join(sample_path, f"{base_count:05}_attn_blocks.png"))
                         except Exception as e:
                             print(f"Error creating attention overlay: {e}")
                             # Save the image without overlay as a fallback
