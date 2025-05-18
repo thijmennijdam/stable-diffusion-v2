@@ -713,14 +713,16 @@ class LatentDiffusion(DDPM):
             # image_features = image_features.mean(dim=0) # [D]
             print(f"Image features shape: {image_features.shape}")
             print(f"Text features shape: {c.shape}")
-            image_token = image_features.unsqueeze(0).unsqueeze(1) # [1, 1, 1024]
-            print("image_token.shape: ", image_token.shape)
-            
+            image_token = image_features.unsqueeze(0) # [1, N_patch, D]
+            print(f"Image token shape: {image_token.shape}")
+
             # Replicate image token to match batch size
-            image_token = image_token.repeat(c.shape[0], 1, 1) # [3, 1, 1024]
+            image_token = image_token.repeat(c.shape[0], 1, 1) # [B, N_patch, D]
+            print(f"Image token after repeat shape: {image_token.shape}")
             
-            c = c.to(self.device)
-            c = torch.cat([c, image_token], dim=1) # append token
+            # c = c.to(self.device) 
+            # Concatenate with text features
+            c = torch.cat([c, image_token], dim=1) # [B, 77+N_patch, D]
             print(f"Extended conditioning tokens: {c.shape}")
 
         ## --------- End of Visual Concept Fusion implementation --------- ##
