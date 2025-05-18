@@ -710,12 +710,18 @@ class LatentDiffusion(DDPM):
             # Extract and normalize CLIP image features
             image_features = self.clip_model(ref_image) # [B, D]
             image_features = self.image_to_text_aligner(image_features).squeeze(0) # [N_patch, D]
-            image_features = image_features.mean(dim=0) # [D]
+            # image_features = image_features.mean(dim=0) # [D]
             print(f"Image features shape: {image_features.shape}")
             print(f"Text features shape: {c.shape}")
-            # Blend text and image features
-            alpha = self.ref_blend_weight
-            c = (1 - alpha) * c + alpha * image_features
+            image_token = image_features.unsqueeze(0).unsqueeze(1) # [1, 1, 1024]
+            print("image_token.shape: ", image_token.shape)
+            
+            # Replicate image token to match batch size
+            image_token = image_token.repeat(c.shape[0], 1, 1) # [3, 1, 1024]
+            
+            c = c.to(self.device)
+            c = torch.cat([c, image_token], dim=1) # append token
+            print(f"Extended conditioning tokens: {c.shape}")
 
         ## --------- End of Visual Concept Fusion implementation --------- ##
         
@@ -1189,6 +1195,16 @@ class LatentDiffusion(DDPM):
                 c[i] = repeat(c[i], '1 ... -> b ...', b=batch_size).to(self.device)
         else:
             c = repeat(c, '1 ... -> b ...', b=batch_size).to(self.device)
+        
+        # Add image token to unconditional conditioning if using reference image
+        if self.use_ref_img and hasattr(self, 'clip_model'):
+            # Create a zero tensor with the same shape as the image token
+            image_token = torch.zeros((1, 1, 1024), device=self.device)
+            # Replicate to match batch size
+            image_token = image_token.repeat(batch_size, 1, 1)
+            # Concatenate with the conditioning
+            c = torch.cat([c, image_token], dim=1)
+        
         return c
 
     @torch.no_grad()

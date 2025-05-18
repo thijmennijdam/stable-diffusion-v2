@@ -24,7 +24,7 @@ python scripts/txt2img.py \
   --config configs/stable-diffusion/v2-inference-v.yaml \
   --H 768 --W 768 \
   --ref_img "data/picasso_style.jpg" \
-  --aligner_model_path "weights/img2text_aligner/coco_cosine/model_best.pth" \
+  --aligner_model_path "/scratch-shared/holy-triangle/weights/img2text_aligner_fixed/flickr30k_cosine/model_best.pth" \
   --ref_blend_weight 1.0
 
 echo "✅ Inference job completed at: $(date)"
