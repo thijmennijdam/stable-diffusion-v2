@@ -74,8 +74,6 @@ class AttnStore:
 
 from skimage.measure import block_reduce
 
-from skimage.measure import block_reduce
-
 def build_heatmaps(store, H, W, token_idx=None, h8=4, w8=4):
     """
     Builds a per-patch attention heatmap, aggregated to (h8, w8) and upsampled to (H, W).
