@@ -28,6 +28,7 @@ from ldm.modules.diffusionmodules.util import make_beta_schedule, extract_into_t
 from ldm.models.diffusion.ddim import DDIMSampler
 from ldm.modules.encoders.modules import FrozenOpenCLIPImageEmbedder
 from ldm.modules.vcf.aligner import ImageToTextAligner
+from ldm.modules.diffusionmodules.util import timestep_embedding
 
 __conditioning_keys__ = {'concat': 'c_concat',
                          'crossattn': 'c_crossattn',
@@ -295,10 +296,23 @@ class DDPM(pl.LightningModule):
         )
 
     def predict_eps_from_z_and_v(self, x_t, t, v):
-        return (
-                extract_into_tensor(self.sqrt_alphas_cumprod, t, x_t.shape) * v +
-                extract_into_tensor(self.sqrt_one_minus_alphas_cumprod, t, x_t.shape) * x_t
-        )
+        """
+        Ensures tensor dimensions match before computation
+        """
+        if isinstance(v, tuple):
+            v = v[0]  # Take first element if it's a tuple
+        
+        alphas = extract_into_tensor(self.alphas_cumprod, t, x_t.shape)
+        sqrt_alphas = extract_into_tensor(self.sqrt_alphas_cumprod, t, x_t.shape)
+        sqrt_one_minus_alphas = extract_into_tensor(self.sqrt_one_minus_alphas_cumprod, t, x_t.shape)
+
+        # Ensure v has the same batch size as x_t
+        if v.shape[0] != x_t.shape[0]:
+            v = v[:x_t.shape[0]]
+
+        # Compute epsilon
+        eps = sqrt_alphas * v + sqrt_one_minus_alphas * x_t
+        return eps
 
     def q_posterior(self, x_start, x_t, t):
         posterior_mean = (
@@ -536,6 +550,8 @@ class LatentDiffusion(DDPM):
                  force_null_conditioning=False,
                  use_ref_img=False,
                  ref_blend_weight=0.05,  # Add control for text-image blending
+                 timestep_conditioning_start=0.1, 
+                 timestep_conditioning_end=0.5, 
                  *args, **kwargs):
         self.force_null_conditioning = force_null_conditioning
         self.num_timesteps_cond = default(num_timesteps_cond, 1)
@@ -585,6 +601,8 @@ class LatentDiffusion(DDPM):
         ################################
         self.use_ref_img = use_ref_img
         self.ref_blend_weight = ref_blend_weight
+        self.timestep_conditioning_start = timestep_conditioning_start
+        self.timestep_conditioning_end = timestep_conditioning_end
 
         if self.use_ref_img:
             self.create_ref_img_encoder()
@@ -691,7 +709,13 @@ class LatentDiffusion(DDPM):
             raise NotImplementedError(f"encoder_posterior of type '{type(encoder_posterior)}' not yet implemented")
         return self.scale_factor * z
 
-    def get_learned_conditioning(self, c, ref_image=None):
+    def get_learned_conditioning(self, c, ref_image=None, store_both=False):
+        # Handle input conditioning
+        if isinstance(c, (list, tuple)): # if c is a list or tuple, convert to string
+            c = c[0] if len(c) > 0 else ""
+        elif torch.is_tensor(c): # if c is a tensor, convert to string
+            c = str(c.item()) if c.numel() == 1 else str(c.tolist())
+        
         if self.cond_stage_forward is None:
             if hasattr(self.cond_stage_model, 'encode') and callable(self.cond_stage_model.encode):
                 c = self.cond_stage_model.encode(c)
@@ -702,8 +726,11 @@ class LatentDiffusion(DDPM):
         else:
             assert hasattr(self.cond_stage_model, self.cond_stage_forward)
             c = getattr(self.cond_stage_model, self.cond_stage_forward)(c)
-            
+        
         ## --------- Visual Concept Fusion implementation --------- ##
+        # Store original text conditioning
+        text_only_conditioning = c.clone() if store_both else None
+        
         if self.use_ref_img and ref_image is not None:
             ref_image = ref_image.to(self.device)
 
@@ -713,14 +740,23 @@ class LatentDiffusion(DDPM):
             image_features = image_features.mean(dim=0) # [D]
             print(f"Image features shape: {image_features.shape}")
             print(f"Text features shape: {c.shape}")
+
+            # Ensure image features match the batch dimension of text features
+            if len(image_features.shape) == 1:
+                image_features = image_features.unsqueeze(0)
+            if c.shape[0] > image_features.shape[0]:
+                image_features = image_features.repeat(c.shape[0], 1)
+
             # Blend text and image features
             alpha = self.ref_blend_weight
-            c = (1 - alpha) * c + alpha * image_features
+            c = (1 - alpha) * c + alpha * image_features.to(c.device)
 
         ## --------- End of Visual Concept Fusion implementation --------- ##
-        
-        return c
-    
+        if store_both:
+            return text_only_conditioning, c
+        else:
+            return c
+            
 
     def meshgrid(self, h, w):
         y = torch.arange(0, h).view(h, 1, 1).repeat(1, w, 1)
@@ -895,22 +931,33 @@ class LatentDiffusion(DDPM):
                 c = self.q_sample(x_start=c, t=tc, noise=torch.randn_like(c.float()))
         return self.p_losses(x, c, t, *args, **kwargs)
 
-    def apply_model(self, x_noisy, t, cond, return_ids=False):
+    def apply_model(self, x_noisy, t, cond):
+        if cond is None:
+            return self.model(x_noisy, t)
+        
         if isinstance(cond, dict):
-            # hybrid case, cond is expected to be a dict
-            pass
+            # Handle dictionary conditioning
+            processed_cond = {}
+            for k, v in cond.items():
+                if isinstance(v, list):
+                    processed_cond[k] = [self._maybe_expand(c, x_noisy.shape[0]) for c in v]
+                else:
+                    processed_cond[k] = [self._maybe_expand(v, x_noisy.shape[0])]  # Wrap in list
+            return self.model(x_noisy, t, **processed_cond)
         else:
-            if not isinstance(cond, list):
-                cond = [cond]
-            key = 'c_concat' if self.model.conditioning_key == 'concat' else 'c_crossattn'
-            cond = {key: cond}
+            # Handle tensor conditioning
+            expanded_cond = self._maybe_expand(cond, x_noisy.shape[0])
+            # Always pass as a list for c_crossattn
+            return self.model(x_noisy, t, c_crossattn=[expanded_cond])
 
-        x_recon = self.model(x_noisy, t, **cond)
-
-        if isinstance(x_recon, tuple) and not return_ids:
-            return x_recon[0]
-        else:
-            return x_recon
+    def _maybe_expand(self, tensor, target_size):
+        if tensor is None:
+            return None
+        if not isinstance(tensor, torch.Tensor):
+            return tensor
+        if tensor.shape[0] != target_size:
+            return tensor.repeat(target_size // tensor.shape[0], *[1] * (len(tensor.shape) - 1))
+        return tensor
 
     def _predict_eps_from_xstart(self, x_t, t, pred_xstart):
         return (extract_into_tensor(self.sqrt_recip_alphas_cumprod, t, x_t.shape) * x_t - pred_xstart) / \
