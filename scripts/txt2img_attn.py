@@ -21,6 +21,107 @@ from ldm.models.diffusion.plms import PLMSSampler
 from ldm.models.diffusion.dpm_solver import DPMSolverSampler
 from torchvision import transforms
 
+from sklearn.manifold import TSNE
+import matplotlib.pyplot as plt
+
+from PIL import Image
+
+# -- Update for visualization of attention maps --
+from ldm.modules.attention import BasicTransformerBlock
+
+# ---------- hooks ----------
+class AttnStore:
+    """
+    Collect raw attention (softmax) maps from all cross-attn blocks into a flat list.
+    Each entry: (heads·batch, Q, K) tensor.
+    """
+    def __init__(self):
+        self.store = []
+
+    def _hook(self, name):
+        def fn(_, __, out):  # out = (x, attn)
+            # Only store attention, ignore x
+            attn_map = out[1].detach().cpu()
+            self.store.append(attn_map)
+        return fn
+
+    def install(self, unet):
+        # Register on all cross-attn blocks
+        self.hooks = [m.attn2.register_forward_hook(self._hook(n))
+                      for n, m in unet.named_modules()
+                      if hasattr(m, "attn2")]
+
+    def clear(self):
+        self.store.clear()
+
+# ---------- heatmap builder using t-SNE ----------
+
+
+
+def build_heatmaps(store, H, W, token_idx=None, h8=None, w8=None):
+    """
+    Builds a per-patch attention heatmap, safely reshaped and upsampled to (H, W).
+    """
+    if not store.store:
+        raise ValueError("No attention maps collected!")
+    t = store.store[0]  # (heads·batch, Q, K)
+    # Reduce to (Q,) vector (mean across heads and keys)
+    if t.ndim == 3:
+        attn_patch = t.mean(0).mean(1)  # (Q,)
+    elif t.ndim == 2:
+        attn_patch = t.mean(1)  # (Q,)
+    else:
+        raise ValueError(f"Unexpected attention map shape: {t.shape}")
+
+    # Infer grid size
+    Q = attn_patch.shape[0]
+    if h8 is None or w8 is None:
+        h8 = w8 = int(np.sqrt(Q))
+        if h8 * w8 != Q:
+            raise ValueError(f"Cannot infer square grid for Q={Q}. Set h8/w8 manually.")
+
+    # Convert to numpy, correct dtype
+    heat = attn_patch.detach().cpu().numpy().astype(np.float32)
+    # Remove NaN/Inf (replace with 0)
+    heat = np.nan_to_num(heat, nan=0.0, posinf=0.0, neginf=0.0)
+
+    # Reshape to (h8, w8) patch grid
+    try:
+        heat = heat.reshape((h8, w8))
+    except Exception as e:
+        raise RuntimeError(f"Can't reshape attention vector of length {Q} to grid ({h8},{w8})") from e
+
+    # Normalize
+    min_val, max_val = np.nanmin(heat), np.nanmax(heat)
+    if max_val - min_val > 1e-8:
+        heat = (heat - min_val) / (max_val - min_val)
+    else:
+        heat = np.zeros_like(heat, dtype=np.float32)
+
+    # Upsample to image size (float32, no NaNs/Infs)
+    heat = heat.astype(np.float32)
+    heat = cv2.resize(heat, (W, H), interpolation=cv2.INTER_CUBIC)
+    heat = np.clip(heat, 0, 1)
+    return heat
+
+def overlay(img_pil, heat, alpha=0.6):
+    """
+    Overlays a (H,W) heatmap onto a PIL RGB image.
+    """
+    # Ensure img_pil is RGB
+    img_pil = img_pil.convert("RGB")
+    # Prepare heatmap
+    heat_uint8 = (heat * 255).astype(np.uint8)
+    heatmap = cv2.applyColorMap(heat_uint8, cv2.COLORMAP_JET)
+    heatmap = cv2.cvtColor(heatmap, cv2.COLOR_BGR2RGB)
+    heatmap = Image.fromarray(heatmap).resize(img_pil.size, Image.BILINEAR)
+    # Blend
+    blended = Image.blend(img_pil, heatmap, alpha)
+    return blended
+
+
+
+
 load_dotenv()
 
 torch.set_grad_enabled(False)
@@ -230,6 +331,15 @@ def parse_args():
         help="Path to the aligner model. If not specified, the default model will be used.",
     )
     
+    # -- Update for visualization of attention maps --
+    parser.add_argument("--attn_token", type=str, default=None,
+                    help="token whose attention map is blended; default = first")
+    
+    # Add debug flag
+    parser.add_argument("--debug_attn", action='store_true',
+                    help="Print debug information for attention maps")
+
+    
     opt = parser.parse_args()
     return opt
 
@@ -252,6 +362,10 @@ def main(opt):
     
     device = torch.device("cuda") if opt.device == "cuda" else torch.device("cpu")
     model = load_model_from_config(config, f"{opt.ckpt}", device)
+    
+    attn = AttnStore()
+    attn.install(model.model.diffusion_model)
+
     
     # Set the blend weight for the reference image
     if opt.ref_img:
@@ -468,6 +582,9 @@ def main(opt):
                         prompts = list(prompts)
                     c = model.get_learned_conditioning(prompts, ref_image=ref_image)
                     shape = [opt.C, opt.H // opt.f, opt.W // opt.f]
+                    
+                    # -- Update for visualization of attention maps --
+                    attn.clear()
 
                     samples, _ = sampler.sample(S=opt.steps,
                                                      conditioning=c,
@@ -483,11 +600,31 @@ def main(opt):
                     x_samples = model.decode_first_stage(samples)
                     x_samples = torch.clamp((x_samples + 1.0) / 2.0, min=0.0, max=1.0)
 
+                    # Debug attention store if needed
+                    if opt.debug_attn:
+                        print("\nAttention Store Contents:")
+                        for key, maps in attn.store.items():
+                            if maps:
+                                print(f"Layer {key}: {len(maps)} maps, shape: {maps[0].shape}")
+
                     for x_sample in x_samples:
                         x_sample = 255. * rearrange(x_sample.cpu().numpy(), 'c h w -> h w c')
                         img = Image.fromarray(x_sample.astype(np.uint8))
                         img = put_watermark(img, wm_encoder)
                         img.save(os.path.join(sample_path, f"{base_count:05}.png"))
+                        
+                        try:
+                            # build heat-maps once for this prompt batch
+                            heat = build_heatmaps(attn, opt.H, opt.W, token_idx=None, h8=opt.H//8, w8=opt.W//8)
+
+
+                            overlay_img = overlay(img, heat)
+                            overlay_img.save(os.path.join(sample_path, f"{base_count:05}_attn.png"))
+                        except Exception as e:
+                            print(f"Error creating attention overlay: {e}")
+                            # Save the image without overlay as a fallback
+                            img.save(os.path.join(sample_path, f"{base_count:05}_attn_failed.png"))
+
                         base_count += 1
                         sample_count += 1
 
