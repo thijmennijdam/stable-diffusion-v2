@@ -229,6 +229,18 @@ def parse_args():
         default="weights/img2text_aligner/coco_cosine/model_best.pth",
         help="Path to the aligner model. If not specified, the default model will be used.",
     )
+    parser.add_argument(
+        "--timestep_cond_start",
+        type=float,
+        default=0.1,
+        help="Start of timestep range (as fraction of total steps) to apply image conditioning",
+    )
+    parser.add_argument(
+        "--timestep_cond_end",
+        type=float,
+        default=0.2,
+        help="End of timestep range (as fraction of total steps) to apply image conditioning",
+    )
     
     opt = parser.parse_args()
     return opt
@@ -259,6 +271,10 @@ def main(opt):
         model.set_use_ref_img(True)
         model.create_ref_img_encoder()
         model.create_image_to_text_aligner(opt.aligner_model_path)
+
+        #NOTE: NEW: Set timestep conditioning range
+        model.timestep_conditioning_start = opt.timestep_cond_start
+        model.timestep_conditioning_end = opt.timestep_cond_end
 
     if opt.plms:
         sampler = PLMSSampler(model, device=device)
@@ -478,7 +494,9 @@ def main(opt):
                                                      unconditional_conditioning=uc,
                                                      eta=opt.ddim_eta,
                                                      x_T=start_code,
-                                                     img_callback=wandb_img_callback)
+                                                     img_callback=wandb_img_callback,
+                                                     timestep_conditioning=True,  # Enable timestep conditioning
+                                                     ref_image=ref_image)  # Pass reference image
 
                     x_samples = model.decode_first_stage(samples)
                     x_samples = torch.clamp((x_samples + 1.0) / 2.0, min=0.0, max=1.0)
