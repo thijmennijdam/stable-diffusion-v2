@@ -27,7 +27,6 @@ export TRANSFORMERS_CACHE="/scratch-shared/holy-triangle/huggingface_models"
 #   --epochs 10 \
 #   --lr 1e-4 \
 #   --device cuda \
-#   --wandb_project text-image-aligner \
 #   --model_path weights/img2text_aligner/flickr30k_cosine/model.pth \
 #   --save_every 2
 
@@ -39,7 +38,6 @@ python scripts/vcf/train_img2text_aligner.py \
   --epochs 10 \
   --lr 1e-4 \
   --device cuda \
-  --wandb_project text-image-aligner \
   --model_path weights/img2text_aligner/flickr30k_infonce/model.pth \
   --save_every 2
 
