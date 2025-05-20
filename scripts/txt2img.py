@@ -391,25 +391,20 @@ def main(opt):
         return s.replace(" ", "_").replace("/", "_").replace("-", "_").lower()
 
     wandb_run_name = (
-        f"alpha={opt.ref_blend_weight:.3f}"
-        f"|prompt={clean(opt.prompt)[:30]}"
+        f"prompt={clean(opt.prompt)[:30]}"
         f"|ref={os.path.splitext(os.path.basename(opt.ref_img))[0] if opt.ref_img else 'noref'}"
-        f"|aligner={'/'.join(opt.aligner_model_path.split('/')[-3:])}"
+        f"|alpha={opt.ref_blend_weight}"
     )
 
-    # TODO: for now hard coded, to be fixed
-    loss = "cosine" if "cosine" in opt.aligner_model_path else "infonce"
-    exclude_cls = True
+    opt.loss = "cosine" if "cosine" in opt.aligner_model_path else "infonce"
+    opt.exclude_cls = True
+    opt.create_date = datetime.now().strftime("%d-%m-%Y_%H-%M-%S")
 
     wandb.init(
     project=opt.wandb_project, 
     entity=opt.wandb_entity,
     name=wandb_run_name,
-    config=vars(opt),
-        tags=[
-            f"loss={loss}",
-            f"exclude_cls={exclude_cls}",
-        ]
+    config=vars(opt), # add all the configs in the wandb run
     )
 
     precision_scope = autocast if opt.precision=="autocast" or opt.bf16 else nullcontext
