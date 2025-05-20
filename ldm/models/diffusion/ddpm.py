@@ -536,6 +536,8 @@ class LatentDiffusion(DDPM):
                  force_null_conditioning=False,
                  use_ref_img=False,
                  ref_blend_weight=0.05,  # Add control for text-image blending
+                 timestep_cond_start=0.0, 
+                 timestep_cond_end=1.0,
                  *args, **kwargs):
         self.force_null_conditioning = force_null_conditioning
         self.num_timesteps_cond = default(num_timesteps_cond, 1)
@@ -585,6 +587,9 @@ class LatentDiffusion(DDPM):
         ################################
         self.use_ref_img = use_ref_img
         self.ref_blend_weight = ref_blend_weight
+        self.timestep_cond_start = timestep_cond_start  
+        self.timestep_cond_end = timestep_cond_end    
+
 
         if self.use_ref_img:
             self.create_ref_img_encoder()
@@ -691,7 +696,10 @@ class LatentDiffusion(DDPM):
             raise NotImplementedError(f"encoder_posterior of type '{type(encoder_posterior)}' not yet implemented")
         return self.scale_factor * z
 
-    def get_learned_conditioning(self, c, ref_image=None):
+    def get_learned_conditioning(self, c, ref_image=None, timestep_fraction=None):
+        print(f"DEBUG: get_learned_conditioning called with timestep_fraction: {timestep_fraction}")
+        print(f"DEBUG: Current timestep range: {self.timestep_cond_start} - {self.timestep_cond_end}")
+
         if self.cond_stage_forward is None:
             if hasattr(self.cond_stage_model, 'encode') and callable(self.cond_stage_model.encode):
                 c = self.cond_stage_model.encode(c)
@@ -702,25 +710,46 @@ class LatentDiffusion(DDPM):
         else:
             assert hasattr(self.cond_stage_model, self.cond_stage_forward)
             c = getattr(self.cond_stage_model, self.cond_stage_forward)(c)
-            
+
         ## --------- Visual Concept Fusion implementation --------- ##
         if self.use_ref_img and ref_image is not None:
-            ref_image = ref_image.to(self.device)
+            # Only apply blending if current timestep is within the specified range
+            # or if timestep_fraction is None (for backward compatibility)
+            apply_ref_img = (timestep_fraction is None or 
+                            (self.timestep_cond_start <= timestep_fraction <= self.timestep_cond_end))
+            
+            print(f"DEBUG: Apply reference image conditioning: {apply_ref_img}")
 
-            # Extract and normalize CLIP image features
-            image_features = self.clip_model(ref_image) # [B, D]
-            image_features = self.image_to_text_aligner(image_features).squeeze(0) # [N_patch, D]
-            image_features = image_features.mean(dim=0) # [D]
-            print(f"Image features shape: {image_features.shape}")
-            print(f"Text features shape: {c.shape}")
-            # Blend text and image features
-            alpha = self.ref_blend_weight
-            c = (1 - alpha) * c + alpha * image_features
-
+            if apply_ref_img:
+                print(f"DEBUG: APPLYING reference image at timestep {timestep_fraction}")
+                ref_image = ref_image.to(self.device)
+                # Extract and normalize CLIP image features
+                image_features = self.clip_model(ref_image)  # [B, D]
+                image_features = self.image_to_text_aligner(image_features).squeeze(0)  # [N_patch, D]
+                image_features = image_features.mean(dim=0)  # [D]
+                print(f"Image features shape: {image_features.shape}")
+                print(f"Text features shape: {c.shape}")
+                # Blend text and image features
+                alpha = self.ref_blend_weight
+                c = (1 - alpha) * c + alpha * image_features
+            else:
+                print(f"DEBUG: Not applying reference image at timestep {timestep_fraction}")
         ## --------- End of Visual Concept Fusion implementation --------- ##
         
         return c
     
+    def set_timestep_range(self, start, end):
+        """
+        Set the timestep range for reference image conditioning.
+        
+        Args:
+            start (float): Start timestep as a fraction (0.0 to 1.0)
+            end (float): End timestep as a fraction (0.0 to 1.0)
+        """
+        assert 0.0 <= start <= 1.0, "Start timestep must be between 0.0 and 1.0"
+        assert 0.0 <= end <= 1.0, "End timestep must be between 0.0 and 1.0"
+        self.timestep_cond_start = start
+        self.timestep_cond_end = end
 
     def meshgrid(self, h, w):
         y = torch.arange(0, h).view(h, 1, 1).repeat(1, w, 1)
@@ -895,7 +924,8 @@ class LatentDiffusion(DDPM):
                 c = self.q_sample(x_start=c, t=tc, noise=torch.randn_like(c.float()))
         return self.p_losses(x, c, t, *args, **kwargs)
 
-    def apply_model(self, x_noisy, t, cond, return_ids=False):
+    def apply_model(self, x_noisy, t, cond, return_ids=False, timestep_fraction=None):
+        print(f"DEBUG: apply_model received timestep_fraction: {timestep_fraction}")
         if isinstance(cond, dict):
             # hybrid case, cond is expected to be a dict
             pass
@@ -905,7 +935,7 @@ class LatentDiffusion(DDPM):
             key = 'c_concat' if self.model.conditioning_key == 'concat' else 'c_crossattn'
             cond = {key: cond}
 
-        x_recon = self.model(x_noisy, t, **cond)
+        x_recon = self.model(x_noisy, t, **cond, timestep_fraction=timestep_fraction)
 
         if isinstance(x_recon, tuple) and not return_ids:
             return x_recon[0]
@@ -1383,7 +1413,8 @@ class DiffusionWrapper(pl.LightningModule):
         self.conditioning_key = conditioning_key
         assert self.conditioning_key in [None, 'concat', 'crossattn', 'hybrid', 'adm', 'hybrid-adm', 'crossattn-adm']
 
-    def forward(self, x, t, c_concat: list = None, c_crossattn: list = None, c_adm=None):
+    def forward(self, x, t, c_concat: list = None, c_crossattn: list = None, c_adm=None, timestep_fraction=None):
+        print(f"DEBUG: DiffusionWrapper.forward received timestep_fraction: {timestep_fraction}")
         if self.conditioning_key is None:
             out = self.diffusion_model(x, t)
         elif self.conditioning_key == 'concat':
@@ -1400,7 +1431,7 @@ class DiffusionWrapper(pl.LightningModule):
                 # an error: RuntimeError: forward() is missing value for argument 'argument_3'.
                 out = self.scripted_diffusion_model(x, t, cc)
             else:
-                out = self.diffusion_model(x, t, context=cc)
+                out = self.diffusion_model(x, t, context=cc, timestep_fraction=timestep_fraction)
         elif self.conditioning_key == 'hybrid':
             xc = torch.cat([x] + c_concat, dim=1)
             cc = torch.cat(c_crossattn, 1)

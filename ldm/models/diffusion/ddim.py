@@ -150,6 +150,7 @@ class DDIMSampler(object):
 
         for i, step in enumerate(iterator):
             index = total_steps - i - 1
+            print(f"DEBUG: DDIM sampling at step {i}, index {index}, total_steps {total_steps}")
             ts = torch.full((b,), step, device=device, dtype=torch.long)
 
             if mask is not None:
@@ -186,7 +187,8 @@ class DDIMSampler(object):
         b, *_, device = *x.shape, x.device
 
         if unconditional_conditioning is None or unconditional_guidance_scale == 1.:
-            model_output = self.model.apply_model(x, t, c)
+            # Pass timestep fraction to the model's apply_model function
+            model_output = self.model.apply_model(x, t, c, timestep_fraction=timestep_fraction)
         else:
             x_in = torch.cat([x] * 2)
             t_in = torch.cat([t] * 2)
@@ -209,7 +211,7 @@ class DDIMSampler(object):
                     c_in.append(torch.cat([unconditional_conditioning[i], c[i]]))
             else:
                 c_in = torch.cat([unconditional_conditioning, c])
-            model_uncond, model_t = self.model.apply_model(x_in, t_in, c_in).chunk(2)
+            model_uncond, model_t = self.model.apply_model(x_in, t_in, c_in, timestep_fraction).chunk(2)
             model_output = model_uncond + unconditional_guidance_scale * (model_t - model_uncond)
 
         if self.model.parameterization == "v":

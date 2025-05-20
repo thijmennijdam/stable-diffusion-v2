@@ -229,6 +229,18 @@ def parse_args():
         default="weights/img2text_aligner/coco_cosine/model_best.pth",
         help="Path to the aligner model. If not specified, the default model will be used.",
     )
+    parser.add_argument(
+        "--timestep_cond_start",
+        type=float,
+        default=0.0,
+        help="Start timestep (as fraction from 0 to 1) for reference image conditioning",
+    )
+    parser.add_argument(
+        "--timestep_cond_end",
+        type=float,
+        default=1.0,
+        help="End timestep (as fraction from 0 to 1) for reference image conditioning",
+    )
     
     opt = parser.parse_args()
     return opt
@@ -243,6 +255,8 @@ def put_watermark(img, wm_encoder=None):
 
 
 def main(opt):
+    print(f"DEBUG: Command line args: timestep_cond_start={opt.timestep_cond_start}, timestep_cond_end={opt.timestep_cond_end}")
+
     seed_everything(opt.seed)
     # Set project and entity name from environment variables
     opt.wandb_project = os.getenv("WANDB_PROJECT", "stable-diffusion-v2")
@@ -259,6 +273,7 @@ def main(opt):
         model.set_use_ref_img(True)
         model.create_ref_img_encoder()
         model.create_image_to_text_aligner(opt.aligner_model_path)
+        model.set_timestep_range(opt.timestep_cond_start, opt.timestep_cond_end)
 
     if opt.plms:
         sampler = PLMSSampler(model, device=device)
@@ -309,6 +324,8 @@ def main(opt):
             ref_image = transforms.ToTensor()(ref_image).to(device).unsqueeze(0) 
             # scale to -1 to 1
             ref_image = (ref_image - 0.5) * 2           
+            if ref_image is not None:
+                sampler.set_reference_image(ref_image, opt.timestep_cond_start, opt.timestep_cond_end)
         else:
             print(f"Warning: Reference image not found at {opt.ref_img}. Skipping.")
     else:
