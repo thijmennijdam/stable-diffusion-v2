@@ -19,7 +19,7 @@ ALIGNER_MODELS=(
 PROMPT="a photo of a cat"
 REF_IMG="data/cat.jpg"
 CONFIG="configs/stable-diffusion/v2-inference-v.yaml"
-CKPT="model_checkpoint.ckpt"
+CKPT="/scratch-shared/holy-triangle/weights/stable-diffusion-2-1/v2-1_768-ema-pruned.ckpt"
 
 # Path to job script
 JOB_SCRIPT="${SCRIPT_DIR}/run_single_alpha.sh"

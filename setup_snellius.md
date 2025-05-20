@@ -62,7 +62,8 @@ uv run python scripts/txt2img.py \
   --ckpt /scratch-shared/holy-triangle/weights/stable-diffusion-2-1/v2-1_768-ema-pruned.ckpt \
   --config configs/stable-diffusion/v2-inference-v.yaml \
   --H 768 --W 768 \
-  --ref_img "data/picasso_style.jpg"
+  --ref_img "data/picasso_style.jpg" \
+  --aligner_model_path "/home/azywot/FOMO/stable-diffusion-v2/weights/img2text_aligner_fixed/flickr30k_cosine/model_best.pth"
 ```
 
 ---
