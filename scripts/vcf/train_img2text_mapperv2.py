@@ -222,22 +222,16 @@ def train_mapper(
     
     # Initial validation loss
     exclude_cls = args.exclude_cls
-    
-    initial_val_loss = evaluate_loss(val_loader, clip_text_encoder, clip_image_encoder, loss_fn, mapper, device, exclude_cls)
-    print(f"Initial Validation Loss: {initial_val_loss:.4f}")
-    wandb.log({"initial_val_loss": initial_val_loss})
-    
-    # optimizer = torch.optim.Adam(mapper.parameters(), lr=args.lr)
-    optimizer = torch.optim.AdamW(mapper.parameters(), lr=1e-4, weight_decay=0.01)
-    
-    # option 1
-    scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=50000)
-    
-    # option 2
-    # scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(optimizer, mode='min', factor=0.5, patience=5)
-
 
     wandb.watch(mapper, log="all")
+
+    initial_val_loss = evaluate_loss(val_loader, clip_text_encoder, clip_image_encoder, loss_fn, mapper, device, exclude_cls)
+    print(f"Initial Validation Loss: {initial_val_loss:.4f}")
+    wandb.log({"val_loss": initial_val_loss})
+    
+    optimizer = torch.optim.AdamW(mapper.parameters(), lr=1e-4, weight_decay=0.01)
+    scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=50000)
+
     os.makedirs(os.path.dirname(save_path), exist_ok=True)
 
     best_val_loss = float("inf")
@@ -287,11 +281,11 @@ def train_mapper(
             torch.save(mapper.state_dict(), checkpoint_path)
             print(f"Model checkpoint saved at {checkpoint_path}")
 
-        
     wandb.log({"best_val_loss": best_val_loss})
     best_model_path_filename = os.path.basename(best_model_path)
-    wandb.log({"best_model": wandb.Artifact(best_model_path_filename, type="model")})
-    wandb.save(best_model_path)
+    artifact = wandb.Artifact(best_model_path_filename, type="model")
+    artifact.add_file(best_model_path)
+    wandb.log_artifact(artifact)
 
     # Load and evaluate best model on test set
     mapper.load_state_dict(torch.load(best_model_path))
@@ -334,10 +328,16 @@ if __name__ == "__main__":
     if not os.getenv("WANDB_API_KEY"):
         raise ValueError("WANDB_API_KEY is not set in the environment.")
     wandb.login(key=os.getenv("WANDB_API_KEY"))
-    wandb.init(project=args.wandb_project, entity=args.wandb_entity, config=vars(args),
-                name=f"mapper-{args.loss}-{args.datasets}-{args.epochs}epochs-{args.batch_size}bs-{args.lr}lr",
-                # tags= ...
-               )
+    project_name = os.getenv("WANDB_PROJECT", args.wandb_project)
+    entity_name = os.getenv("WANDB_ENTITY", args.wandb_entity)
+
+    datasets_name = "+".join(args.datasets) if len(args.datasets) > 1 else args.datasets[0]
+    wandb.init(
+        project=project_name,
+        entity=entity_name,
+        config=vars(args),
+        name=f"mapper-{args.loss}-{datasets_name}-{args.epochs}epochs-{args.batch_size}bs-{args.lr}lr"
+    )
 
     loss_function = cosine_similarity_loss if args.loss == "cosine" else info_nce_loss
 
