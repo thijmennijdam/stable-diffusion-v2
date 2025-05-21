@@ -186,6 +186,10 @@ class DDIMSampler(object):
                       dynamic_threshold=None):
         b, *_, device = *x.shape, x.device
 
+        # Calculate timestep fraction for conditioning
+        total_steps = self.ddpm_num_timesteps if use_original_steps else self.ddim_timesteps.shape[0]
+        timestep_fraction = float(index) / float(total_steps - 1)  # Normalize to [0, 1]
+
         if unconditional_conditioning is None or unconditional_guidance_scale == 1.:
             # Pass timestep fraction to the model's apply_model function
             model_output = self.model.apply_model(x, t, c, timestep_fraction=timestep_fraction)
