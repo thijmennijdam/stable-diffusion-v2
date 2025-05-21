@@ -19,11 +19,13 @@ from ldm.util import instantiate_from_config
 from ldm.models.diffusion.ddim import DDIMSampler
 from ldm.models.diffusion.plms import PLMSSampler
 from ldm.models.diffusion.dpm_solver import DPMSolverSampler
+from ldm.modules.encoders.modules import FrozenOpenCLIPImageEmbedder, FrozenOpenCLIPEmbedder
+from scripts.vcf.pno import optimize_pno, extract_image_features, instantiate_clip_encoders
 from torchvision import transforms
 
 load_dotenv()
-
-torch.set_grad_enabled(False)
+USE_PNO = True
+# torch.set_grad_enabled(False)
 
 def chunk(it, size):
     it = iter(it)
@@ -229,6 +231,25 @@ def parse_args():
         default="weights/img2text_aligner/coco_cosine/model_best.pth",
         help="Path to the aligner model. If not specified, the default model will be used.",
     )
+    # Add PNO-specific arguments
+    parser.add_argument(
+        "--pno_steps",
+        type=int,
+        default=10,
+        help="Number of PNO optimization steps",
+    )
+    parser.add_argument(
+        "--lr_prompt",
+        type=float,
+        default=1e-4,
+        help="Learning rate for prompt optimization",
+    )
+    parser.add_argument(
+        "--lr_noise",
+        type=float,
+        default=1e-4,
+        help="Learning rate for noise optimization",
+    )
     
     opt = parser.parse_args()
     return opt
@@ -253,8 +274,8 @@ def main(opt):
     device = torch.device("cuda") if opt.device == "cuda" else torch.device("cpu")
     model = load_model_from_config(config, f"{opt.ckpt}", device)
     
-    # Set the blend weight for the reference image
-    if opt.ref_img:
+    # Set the blend weight for the reference image if using the reference image flow
+    if opt.ref_img and not USE_PNO:
         model.set_blend_weight(opt.ref_blend_weight)
         model.set_use_ref_img(True)
         model.create_ref_img_encoder()
@@ -305,10 +326,16 @@ def main(opt):
 
     if opt.ref_img:
         if os.path.exists(opt.ref_img):
-            ref_image = Image.open(opt.ref_img).convert("RGB")
-            ref_image = transforms.ToTensor()(ref_image).to(device).unsqueeze(0) 
-            # scale to -1 to 1
-            ref_image = (ref_image - 0.5) * 2           
+            if not USE_PNO:
+                ref_image = Image.open(opt.ref_img).convert("RGB")
+                ref_image = transforms.ToTensor()(ref_image).to(device).unsqueeze(0) 
+                # scale to -1 to 1
+                ref_image = (ref_image - 0.5) * 2
+            else:
+                # --- Reference image and feature extraction ---
+                openclip_image_encoder = instantiate_clip_encoders(device=device)
+                image_feat = extract_image_features(openclip_image_encoder, opt.ref_img, device=device)
+                # --- End reference image and feature extraction ---
         else:
             print(f"Warning: Reference image not found at {opt.ref_img}. Skipping.")
     else:
@@ -393,7 +420,8 @@ def main(opt):
     wandb_run_name = (
         f"prompt={clean(opt.prompt)[:30]}"
         f"|ref={os.path.splitext(os.path.basename(opt.ref_img))[0] if opt.ref_img else 'noref'}"
-        f"|alpha={opt.ref_blend_weight}"
+        f"|{'pno' if USE_PNO else 'std'}"
+        f"|alpha={'-' if USE_PNO else opt.ref_blend_weight}"
     )
 
     opt.loss = "cosine" if "cosine" in opt.aligner_model_path else "infonce"
@@ -401,10 +429,10 @@ def main(opt):
     opt.create_date = datetime.now().strftime("%d-%m-%Y_%H-%M-%S")
 
     wandb.init(
-    project=opt.wandb_project, 
-    entity=opt.wandb_entity,
-    name=wandb_run_name,
-    config=vars(opt), # add all the configs in the wandb run
+        project=opt.wandb_project, 
+        entity=opt.wandb_entity,
+        name=wandb_run_name,
+        config=vars(opt), # add all the configs in the wandb run
     )
 
     precision_scope = autocast if opt.precision=="autocast" or opt.bf16 else nullcontext
@@ -433,9 +461,10 @@ def main(opt):
                 # Convert to image format wandb can handle
                 images = []
                 for sample_idx, x_sample in enumerate(pred_x0):
-                    x_sample = model.decode_first_stage(x_sample.unsqueeze(0))[0]
-                    x_sample = torch.clamp((x_sample + 1.0) / 2.0, min=0.0, max=1.0)
-                    x_sample = 255. * rearrange(x_sample.cpu().numpy(), 'c h w -> h w c')
+                    with torch.no_grad():
+                        x_sample = model.decode_first_stage(x_sample.unsqueeze(0))[0]
+                        x_sample = torch.clamp((x_sample + 1.0) / 2.0, min=0.0, max=1.0)
+                        x_sample = 255. * rearrange(x_sample.cpu().numpy(), 'c h w -> h w c')
                     images.append(wandb.Image(x_sample.astype(np.uint8), 
                                               caption=f"Iter {iteration}, Prompt {prompt_idx}, Sample {sample_idx}, Step {i}/{total_steps}"))
                 
@@ -461,23 +490,59 @@ def main(opt):
                         uc = model.get_learned_conditioning(batch_size * [""])
                     if isinstance(prompts, tuple):
                         prompts = list(prompts)
-                    c = model.get_learned_conditioning(prompts, ref_image=ref_image)
                     shape = [opt.C, opt.H // opt.f, opt.W // opt.f]
 
-                    samples, _ = sampler.sample(S=opt.steps,
-                                                     conditioning=c,
-                                                     batch_size=opt.n_samples,
-                                                     shape=shape,
-                                                     verbose=False,
-                                                     unconditional_guidance_scale=opt.scale,
-                                                     unconditional_conditioning=uc,
-                                                     eta=opt.ddim_eta,
-                                                     x_T=start_code,
-                                                     img_callback=wandb_img_callback)
+                    if USE_PNO:
+                        # PNO Optimization Path
+                        all_pno_samples = []
+                        for idx in range(batch_size): # opt.n_samples
+                            samples = optimize_pno(
+                                model=model,
+                                sampler=sampler,
+                                clip_model_img=openclip_image_encoder,
+                                text_prompt=prompts[0], # NOTE: we use only 1 prompt at a time
+                                image_feat=image_feat,
+                                steps=opt.pno_steps,
+                                ddim_steps=opt.steps,
+                                lr_prompt=opt.lr_prompt,
+                                lr_noise=opt.lr_noise,
+                                unconditional_guidance_scale=opt.scale,
+                                unconditional_conditioning=uc[idx:idx+1] if uc is not None else None,
+                                device=device,
+                                opt=opt,
+                            )
+                            all_pno_samples.append(samples)
+                            
 
-                    x_samples = model.decode_first_stage(samples)
-                    x_samples = torch.clamp((x_samples + 1.0) / 2.0, min=0.0, max=1.0)
+                        # Stack samples if there are multiple
+                        if len(all_pno_samples) > 1:
+                            samples = torch.cat(all_pno_samples, dim=0)
+                        else:
+                            samples = all_pno_samples[0]
+                        
+                        # Decode latents to images
+                        x_samples = samples # model.decode_first_stage(samples)
+                        print(f"x_samples shape: {x_samples.shape}")
+                    else:
+                        # Standard Sampling Path
+                        c = model.get_learned_conditioning(prompts, ref_image=ref_image)
+                        samples, _ = sampler.sample(
+                            S=opt.steps,
+                            conditioning=c,
+                            batch_size=opt.n_samples,
+                            shape=shape,
+                            verbose=False,
+                            unconditional_guidance_scale=opt.scale,
+                            unconditional_conditioning=uc,
+                            eta=opt.ddim_eta,
+                            x_T=start_code
+                        )
 
+                        # Decode latents to images
+                        x_samples = model.decode_first_stage(samples)
+                        x_samples = torch.clamp((x_samples + 1.0) / 2.0, min=0.0, max=1.0)
+
+                    # Save individual samples
                     for x_sample in x_samples:
                         x_sample = 255. * rearrange(x_sample.cpu().numpy(), 'c h w -> h w c')
                         img = Image.fromarray(x_sample.astype(np.uint8))

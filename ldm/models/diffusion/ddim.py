@@ -52,7 +52,7 @@ class DDIMSampler(object):
                         1 - self.alphas_cumprod / self.alphas_cumprod_prev))
         self.register_buffer('ddim_sigmas_for_original_num_steps', sigmas_for_original_sampling_steps)
 
-    @torch.no_grad()
+    # @torch.no_grad()
     def sample(self,
                S,
                batch_size,
@@ -76,8 +76,15 @@ class DDIMSampler(object):
                unconditional_conditioning=None, # this has to come in the same format as the conditioning, # e.g. as encoded tokens, ...
                dynamic_threshold=None,
                ucg_schedule=None,
+               enable_grad=False,
                **kwargs
                ):
+        # print if grad is enabled
+        if enable_grad:
+            torch.set_grad_enabled(True)
+        else:
+            torch.set_grad_enabled(False)
+        # print(f"<> [sample] Gradient is enabled: {torch.is_grad_enabled()}")
         if conditioning is not None:
             if isinstance(conditioning, dict):
                 ctmp = conditioning[list(conditioning.keys())[0]]
@@ -116,18 +123,25 @@ class DDIMSampler(object):
                                                     unconditional_guidance_scale=unconditional_guidance_scale,
                                                     unconditional_conditioning=unconditional_conditioning,
                                                     dynamic_threshold=dynamic_threshold,
-                                                    ucg_schedule=ucg_schedule
+                                                    ucg_schedule=ucg_schedule,
+                                                    enable_grad=enable_grad,
                                                     )
         return samples, intermediates
 
-    @torch.no_grad()
+    # @torch.no_grad()
     def ddim_sampling(self, cond, shape,
                       x_T=None, ddim_use_original_steps=False,
                       callback=None, timesteps=None, quantize_denoised=False,
                       mask=None, x0=None, img_callback=None, log_every_t=100,
                       temperature=1., noise_dropout=0., score_corrector=None, corrector_kwargs=None,
                       unconditional_guidance_scale=1., unconditional_conditioning=None, dynamic_threshold=None,
-                      ucg_schedule=None):
+                      ucg_schedule=None, enable_grad=False):
+        
+        if enable_grad:
+            torch.set_grad_enabled(True)
+        else:
+            torch.set_grad_enabled(False)
+        # print(f"<><> [ddim_sampling] Gradient is enabled: {torch.is_grad_enabled()}")
         device = self.model.betas.device
         b = shape[0]
         if x_T is None:
@@ -167,7 +181,7 @@ class DDIMSampler(object):
                                       corrector_kwargs=corrector_kwargs,
                                       unconditional_guidance_scale=unconditional_guidance_scale,
                                       unconditional_conditioning=unconditional_conditioning,
-                                      dynamic_threshold=dynamic_threshold)
+                                      dynamic_threshold=dynamic_threshold, enable_grad=enable_grad)
             img, pred_x0 = outs
             if callback: callback(i)
             if img_callback: img_callback(pred_x0, i)
@@ -178,11 +192,16 @@ class DDIMSampler(object):
 
         return img, intermediates
 
-    @torch.no_grad()
+    # @torch.no_grad()
     def p_sample_ddim(self, x, c, t, index, repeat_noise=False, use_original_steps=False, quantize_denoised=False,
                       temperature=1., noise_dropout=0., score_corrector=None, corrector_kwargs=None,
                       unconditional_guidance_scale=1., unconditional_conditioning=None,
-                      dynamic_threshold=None):
+                      dynamic_threshold=None, enable_grad=False):
+        if enable_grad:
+            torch.set_grad_enabled(True)
+        else:
+            torch.set_grad_enabled(False)
+        # print(f"<><><> [p_sample_ddim] Gradient is enabled: {torch.is_grad_enabled()}")
         b, *_, device = *x.shape, x.device
 
         if unconditional_conditioning is None or unconditional_guidance_scale == 1.:

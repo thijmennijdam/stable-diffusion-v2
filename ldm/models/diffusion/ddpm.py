@@ -864,8 +864,13 @@ class LatentDiffusion(DDPM):
             out.append(xc)
         return out
 
-    @torch.no_grad()
-    def decode_first_stage(self, z, predict_cids=False, force_not_quantize=False):
+    # @torch.no_grad()
+    def decode_first_stage(self, z, predict_cids=False, force_not_quantize=False, enable_grad=False):
+        if enable_grad:
+            torch.set_grad_enabled(True)
+        else:
+            torch.set_grad_enabled(False)
+        print(f"<><> Gradient enabled: {torch.is_grad_enabled()}")
         if predict_cids:
             if z.dim() == 4:
                 z = torch.argmax(z.exp(), dim=1).long()

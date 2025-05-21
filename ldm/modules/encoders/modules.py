@@ -242,7 +242,7 @@ class FrozenOpenCLIPImageEmbedder(AbstractEncoder):
     """
 
     def __init__(self, arch="ViT-H-14", version="laion2b_s32b_b79k", device="cuda", max_length=77,
-                 freeze=True, layer="pooled", antialias=True, ucg_rate=0.):
+                 freeze=True, layer="pooled", antialias=True, ucg_rate=0., preproject=True, exclude_cls=True):
         super().__init__()
         model, _, _ = open_clip.create_model_and_transforms(arch, device=torch.device('cpu'),
                                                             pretrained=version, )
@@ -262,6 +262,10 @@ class FrozenOpenCLIPImageEmbedder(AbstractEncoder):
         self.register_buffer('mean', torch.Tensor([0.48145466, 0.4578275, 0.40821073]), persistent=False)
         self.register_buffer('std', torch.Tensor([0.26862954, 0.26130258, 0.27577711]), persistent=False)
         self.ucg_rate = ucg_rate
+        ############# VCF #############
+        self.preproject = preproject
+        self.exclude_cls = exclude_cls
+        ###############################
 
     def preprocess(self, x):
         # normalize to [0,1]
@@ -279,8 +283,8 @@ class FrozenOpenCLIPImageEmbedder(AbstractEncoder):
             param.requires_grad = False
 
     # @autocast removed this
-    def forward(self, image, no_dropout=False, preproject=True, exclude_cls=True):
-        z = self.encode_with_vision_transformer(image, preproject=preproject, exclude_cls=exclude_cls)
+    def forward(self, image, no_dropout=False):
+        z = self.encode_with_vision_transformer(image)
         if self.ucg_rate > 0. and not no_dropout:
             z = torch.bernoulli((1. - self.ucg_rate) * torch.ones(z.shape[0], device=z.device))[:, None] * z
         return z
@@ -309,10 +313,10 @@ class FrozenOpenCLIPImageEmbedder(AbstractEncoder):
             
         return x
     
-    def encode_with_vision_transformer(self, img, preproject=True, exclude_cls=True):
+    def encode_with_vision_transformer(self, img):
         img = self.preprocess(img)
-        if preproject:
-            x = self.extract_patch_features(self.model.visual, img, exclude_cls=exclude_cls) # [B, N_patches+1, D], pre-projection
+        if self.preproject:
+            x = self.extract_patch_features(self.model.visual, img, exclude_cls=self.exclude_cls) # [B, N_patches+1, D], pre-projection
         else:
             x = self.model.visual(img)
         return x
