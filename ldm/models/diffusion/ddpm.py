@@ -113,7 +113,7 @@ class DDPM(pl.LightningModule):
             self.init_from_ckpt(ckpt_path, ignore_keys=ignore_keys, only_model=load_only_unet)
             if reset_ema:
                 assert self.use_ema
-                print(f"Resetting ema to pure model weights. This is useful when restoring from an ema-only checkpoint.")
+                print("Resetting ema to pure model weights. This is useful when restoring from an ema-only checkpoint.")
                 self.model_ema = LitEma(self.model)
         if reset_num_ema_updates:
             print(" +++++++++++ WARNING: RESETTING NUM_EMA UPDATES TO ZERO +++++++++++ ")
@@ -226,7 +226,7 @@ class DDPM(pl.LightningModule):
                     desc="Fitting old weights to new weights",
                     total=n_params
             ):
-                if not name in sd:
+                if name not in sd:
                     continue
                 old_shape = sd[name].shape
                 new_shape = param.shape
@@ -536,6 +536,7 @@ class LatentDiffusion(DDPM):
                  force_null_conditioning=False,
                  use_ref_img=False,
                  ref_blend_weight=0.05,  # Add control for text-image blending
+                 ref_first=False,  # Add this parameter
                  *args, **kwargs):
         self.force_null_conditioning = force_null_conditioning
         self.num_timesteps_cond = default(num_timesteps_cond, 1)
@@ -575,7 +576,7 @@ class LatentDiffusion(DDPM):
             if reset_ema:
                 assert self.use_ema
                 print(
-                    f"Resetting ema to pure model weights. This is useful when restoring from an ema-only checkpoint.")
+                    "Resetting ema to pure model weights. This is useful when restoring from an ema-only checkpoint.")
                 self.model_ema = LitEma(self.model)
         if reset_num_ema_updates:
             print(" +++++++++++ WARNING: RESETTING NUM_EMA UPDATES TO ZERO +++++++++++ ")
@@ -585,6 +586,7 @@ class LatentDiffusion(DDPM):
         ################################
         self.use_ref_img = use_ref_img
         self.ref_blend_weight = ref_blend_weight
+        self.ref_first = ref_first  # Add this line
 
         if self.use_ref_img:
             self.create_ref_img_encoder()
@@ -710,23 +712,17 @@ class LatentDiffusion(DDPM):
             # Extract and normalize CLIP image features
             image_features = self.clip_model(ref_image) # [B, D]
             image_features = self.image_to_text_aligner(image_features).squeeze(0) # [N_patch, D]
-            # image_features = image_features.mean(dim=0) # [D]
-            print(f"Image features shape: {image_features.shape}")
-            print(f"Text features shape: {c.shape}")
             image_token = image_features.unsqueeze(0) # [1, N_patch, D]
-            print(f"Image token shape: {image_token.shape}")
 
             # Replicate image token to match batch size
             image_token = image_token.repeat(c.shape[0], 1, 1) # [B, N_patch, D]
-            print(f"Image token after repeat shape: {image_token.shape}")
             
-            # c = c.to(self.device) 
-            # Concatenate with text features
-            c = torch.cat([c, image_token], dim=1) # [B, 77+N_patch, D]
-            print(f"Extended conditioning tokens: {c.shape}")
+            # Concatenate with text features based on ref_first flag
+            if self.ref_first:
+                c = torch.cat([image_token, c], dim=1) # [B, N_patch+77, D]
+            else:
+                c = torch.cat([c, image_token], dim=1) # [B, 77+N_patch, D]
 
-        ## --------- End of Visual Concept Fusion implementation --------- ##
-        
         return c
     
 
@@ -1197,15 +1193,6 @@ class LatentDiffusion(DDPM):
                 c[i] = repeat(c[i], '1 ... -> b ...', b=batch_size).to(self.device)
         else:
             c = repeat(c, '1 ... -> b ...', b=batch_size).to(self.device)
-        
-        # Add image token to unconditional conditioning if using reference image
-        if self.use_ref_img and hasattr(self, 'clip_model'):
-            # Create a zero tensor with the same shape as the image token
-            image_token = torch.zeros((1, 1, 1024), device=self.device)
-            # Replicate to match batch size
-            image_token = image_token.repeat(batch_size, 1, 1)
-            # Concatenate with the conditioning
-            c = torch.cat([c, image_token], dim=1)
         
         return c
 
@@ -1949,7 +1936,7 @@ class ImageEmbeddingConditionedLatentDiffusion(LatentDiffusion):
 
         uc_ = {"c_crossattn": [uc], "c_adm": c["c_adm"]}
         ema_scope = self.ema_scope if kwargs.get('use_ema_scope', True) else nullcontext
-        with ema_scope(f"Sampling"):
+        with ema_scope("Sampling"):
             samples_cfg, _ = self.sample_log(cond=c, batch_size=N, ddim=True,
                                              ddim_steps=kwargs.get('ddim_steps', 50), eta=kwargs.get('ddim_eta', 0.),
                                              unconditional_guidance_scale=unconditional_guidance_scale,

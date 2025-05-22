@@ -1,4 +1,5 @@
-import argparse, os
+import argparse
+import os
 import cv2
 from datetime import datetime
 import torch
@@ -229,6 +230,11 @@ def parse_args():
         default="weights/img2text_aligner/coco_cosine/model_best.pth",
         help="Path to the aligner model. If not specified, the default model will be used.",
     )
+    parser.add_argument(
+        "--ref_first",
+        action='store_true',
+        help="If set, reference image features will be concatenated before text features",
+    )
     
     opt = parser.parse_args()
     return opt
@@ -259,6 +265,7 @@ def main(opt):
         model.set_use_ref_img(True)
         model.create_ref_img_encoder()
         model.create_image_to_text_aligner(opt.aligner_model_path)
+        model.ref_first = opt.ref_first
 
     if opt.plms:
         sampler = PLMSSampler(model, device=device)
