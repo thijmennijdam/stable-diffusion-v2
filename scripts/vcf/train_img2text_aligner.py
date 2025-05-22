@@ -80,6 +80,7 @@ def cosine_similarity_loss(
         img_repr = img_repr.mean(dim=1)  # [B, D]
     text_repr = text_tokens.mean(dim=1)  # [B, D]
 
+
     # Normalize
     img_repr = F.normalize(img_repr, dim=1)
     text_repr = F.normalize(text_repr, dim=1)
@@ -368,6 +369,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--epochs", type=int, default=10)
     parser.add_argument("--lr", type=float, default=1e-4)
     parser.add_argument("--device", type=str, default="cuda")
+    parser.add_argument("--wandb_project", type=str, default="text-image-aligner-new")
     parser.add_argument("--model_path", type=str, default="weights/img2text_aligner/model.pth")
     parser.add_argument("--save_every", type=int, default=5, help="Save model every N epochs")
     parser.add_argument("--resume_from", type=str, default=None, help="Path to a pretrained aligner checkpoint")
@@ -384,7 +386,7 @@ if __name__ == "__main__":
     if not os.getenv("WANDB_API_KEY"):
         raise ValueError("WANDB_API_KEY is not set in the environment.")
     wandb.login(key=os.getenv("WANDB_API_KEY"))
-    project_name = os.getenv("WANDB_PROJECT", "img2text-alignment")
+    project_name = os.getenv("WANDB_PROJECT", "text-image-aligner-new")
     entity_name = os.getenv("WANDB_ENTITY", "FoMo-2025")
 
     datasets_name = "+".join(args.datasets) if len(args.datasets) > 1 else args.datasets[0]
