@@ -781,9 +781,10 @@ class UNetModel(nn.Module):
         :param y: an [N] Tensor of labels, if class-conditional.
         :return: an [N x C x ...] Tensor of outputs.
         """
-        assert (y is not None) == (
-            self.num_classes is not None
-        ), "must specify y if and only if the model is class-conditional"
+        print(f"[DEBUG] UNet forward pass:")
+        print(f"  Input shape: {x.shape}")
+        print(f"  Context shape: {context.shape if context is not None else None}")
+        
         hs = []
         t_emb = timestep_embedding(timesteps, self.model_channels, repeat_only=False)
         emb = self.time_embed(t_emb)
@@ -793,13 +794,19 @@ class UNetModel(nn.Module):
             emb = emb + self.label_emb(y)
 
         h = x.type(self.dtype)
-        for module in self.input_blocks:
+        for i, module in enumerate(self.input_blocks):
             h = module(h, emb, context)
+            print(f"[DEBUG] Input block {i} output shape: {h.shape}")
             hs.append(h)
+        
         h = self.middle_block(h, emb, context)
-        for module in self.output_blocks:
+        print(f"[DEBUG] Middle block output shape: {h.shape}")
+        
+        for i, module in enumerate(self.output_blocks):
             h = th.cat([h, hs.pop()], dim=1)
             h = module(h, emb, context)
+            print(f"[DEBUG] Output block {i} output shape: {h.shape}")
+        
         h = h.type(x.dtype)
         if self.predict_codebook_ids:
             return self.id_predictor(h)

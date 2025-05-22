@@ -100,7 +100,7 @@ class DDIMSampler(object):
         C, H, W = shape
         size = (batch_size, C, H, W)
         print(f'Data shape for DDIM sampling is {size}, eta {eta}')
-
+        print("[DEBUG] Conditioning shape: ", conditioning.shape)
         samples, intermediates = self.ddim_sampling(conditioning, size,
                                                     callback=callback,
                                                     img_callback=img_callback,
@@ -160,7 +160,8 @@ class DDIMSampler(object):
             if ucg_schedule is not None:
                 assert len(ucg_schedule) == len(time_range)
                 unconditional_guidance_scale = ucg_schedule[i]
-
+            print(f"[DEBUG] Conditioning shape: {cond.shape}")
+            
             outs = self.p_sample_ddim(img, cond, ts, index=index, use_original_steps=ddim_use_original_steps,
                                       quantize_denoised=quantize_denoised, temperature=temperature,
                                       noise_dropout=noise_dropout, score_corrector=score_corrector,
@@ -224,6 +225,7 @@ class DDIMSampler(object):
                         pad = torch.zeros((c.shape[0], pad_size, c.shape[2]), device=c.device)
                         c = torch.cat([c, pad], dim=1)
                 c_in = torch.cat([unconditional_conditioning, c])
+            print(f"[DEBUG] Conditioning shape: {c_in.shape}")
             
             model_uncond, model_t = self.model.apply_model(x_in, t_in, c_in).chunk(2)
             model_output = model_uncond + unconditional_guidance_scale * (model_t - model_uncond)

@@ -463,7 +463,7 @@ def main(opt):
                         prompts = list(prompts)
                     c = model.get_learned_conditioning(prompts, ref_image=ref_image)
                     shape = [opt.C, opt.H // opt.f, opt.W // opt.f]
-
+                    print(f"[DEBUG] Conditioning shape: {c.shape}")
                     samples, _ = sampler.sample(S=opt.steps,
                                                      conditioning=c,
                                                      batch_size=opt.n_samples,

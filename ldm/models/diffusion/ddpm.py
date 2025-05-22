@@ -709,21 +709,22 @@ class LatentDiffusion(DDPM):
 
             # Extract and normalize CLIP image features
             image_features = self.clip_model(ref_image) # [B, D]
+            print(f"[DEBUG] Initial image features shape: {image_features.shape}")
+            
             image_features = self.image_to_text_aligner(image_features).squeeze(0) # [N_patch, D]
-            # image_features = image_features.mean(dim=0) # [D]
-            print(f"Image features shape: {image_features.shape}")
-            print(f"Text features shape: {c.shape}")
+            print(f"[DEBUG] Aligned image features shape: {image_features.shape}")
+            
             image_token = image_features.unsqueeze(0) # [1, N_patch, D]
-            print(f"Image token shape: {image_token.shape}")
-
+            print(f"[DEBUG] Image token shape before repeat: {image_token.shape}")
+            
             # Replicate image token to match batch size
             image_token = image_token.repeat(c.shape[0], 1, 1) # [B, N_patch, D]
-            print(f"Image token after repeat shape: {image_token.shape}")
+            print(f"[DEBUG] Image token shape after repeat: {image_token.shape}")
+            print(f"[DEBUG] Text features shape: {c.shape}")
             
-            # c = c.to(self.device) 
             # Concatenate with text features
             c = torch.cat([c, image_token], dim=1) # [B, 77+N_patch, D]
-            print(f"Extended conditioning tokens: {c.shape}")
+            print(f"[DEBUG] Final concatenated context shape: {c.shape}")
 
         ## --------- End of Visual Concept Fusion implementation --------- ##
         
@@ -904,6 +905,8 @@ class LatentDiffusion(DDPM):
         return self.p_losses(x, c, t, *args, **kwargs)
 
     def apply_model(self, x_noisy, t, cond, return_ids=False):
+        print(f"[DEBUG] Applying model with cond shape: {cond.shape}")
+        
         if isinstance(cond, dict):
             # hybrid case, cond is expected to be a dict
             pass
@@ -1396,12 +1399,16 @@ class LatentDiffusion(DDPM):
 class DiffusionWrapper(pl.LightningModule):
     def __init__(self, diff_model_config, conditioning_key):
         super().__init__()
+        print("We get here after")
         self.sequential_cross_attn = diff_model_config.pop("sequential_crossattn", False)
         self.diffusion_model = instantiate_from_config(diff_model_config)
+        
         self.conditioning_key = conditioning_key
         assert self.conditioning_key in [None, 'concat', 'crossattn', 'hybrid', 'adm', 'hybrid-adm', 'crossattn-adm']
 
     def forward(self, x, t, c_concat: list = None, c_crossattn: list = None, c_adm=None):
+        print(f"[DEBUG] Conditioning key: {self.conditioning_key}")
+        
         if self.conditioning_key is None:
             out = self.diffusion_model(x, t)
         elif self.conditioning_key == 'concat':

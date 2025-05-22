@@ -167,9 +167,14 @@ class CrossAttention(nn.Module):
         context = default(context, x)
         k = self.to_k(context)
         v = self.to_v(context)
+        
+        print(f"[DEBUG] CrossAttention shapes:")
+        print(f"  Query shape: {q.shape}")
+        print(f"  Key shape: {k.shape}")
+        print(f"  Value shape: {v.shape}")
 
         q, k, v = map(lambda t: rearrange(t, 'b n (h d) -> (b h) n d', h=h), (q, k, v))
-
+        
         # force cast to fp32 to avoid overflowing
         if _ATTN_PRECISION =="fp32":
             with torch.autocast(enabled=False, device_type = 'cuda'):
@@ -178,8 +183,10 @@ class CrossAttention(nn.Module):
         else:
             sim = einsum('b i d, b j d -> b i j', q, k) * self.scale
         
+        print(f"[DEBUG] Attention similarity matrix shape: {sim.shape}")
+        
         del q, k
-    
+
         if exists(mask):
             mask = rearrange(mask, 'b ... -> b (...)')
             max_neg_value = -torch.finfo(sim.dtype).max
@@ -188,6 +195,7 @@ class CrossAttention(nn.Module):
 
         # attention, what we cannot get enough of
         sim = sim.softmax(dim=-1)
+        print(f"[DEBUG] Attention weights shape after softmax: {sim.shape}")
 
         out = einsum('b i j, b j d -> b i d', sim, v)
         out = rearrange(out, '(b h) n d -> b n (h d)', h=h)
