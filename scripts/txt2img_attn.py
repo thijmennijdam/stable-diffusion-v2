@@ -45,92 +45,108 @@ uv run python scripts/txt2img_attn.py \
 
 # ---------- hooks ----------
 class AttnStore:
-    """
-    Collect raw attention (softmax) maps from all cross-attn blocks into a flat list.
-    Each entry: (heads·batch, Q, K) tensor.
-    """
     def __init__(self):
-        self.store = []
+        self.attn_vis_maps = []          # Detached attention maps (for plain visualization)
+        self.forward_activations = []    # Raw attention (before detach), needed for Grad-CAM
+        self.backward_gradients = []     # Gradients wrt attention, needed for Grad-CAM
 
-    def _hook(self, name):
-        def fn(_, __, out):  # out = (x, attn)
-            # Only store attention, ignore x
-            attn_map = out[1].detach().cpu()
-            self.store.append(attn_map)
-        return fn
+    def _forward_hook(self, module, input, output):
+        attn = output[1]
+        self.attn_vis_maps.append(attn.detach().cpu())   # For regular attention vis
+        self.forward_activations.append(attn)            # For Grad-CAM (retain graph)
+
+    def _backward_hook(self, module, grad_input, grad_output):
+        self.backward_gradients.append(grad_output[1])   # For Grad-CAM
 
     def install(self, unet):
-        # Register on all cross-attn blocks
-        self.hooks = [m.attn2.register_forward_hook(self._hook(n))
-                      for n, m in unet.named_modules()
-                      if hasattr(m, "attn2")]
+        self.hooks = []
+        for name, m in unet.named_modules():
+            if "attn2" in name and any(b in name for b in ["down_blocks", "mid_block", "up_blocks"]):
+                self.hooks.append(m.register_forward_hook(self._forward_hook))
+                self.hooks.append(m.register_backward_hook(self._backward_hook))
 
     def clear(self):
-        self.store.clear()
+        self.attn_vis_maps.clear()
+        self.forward_activations.clear()
+        self.backward_gradients.clear()
+
+
 
 # ---------- heatmap builder using t-SNE ----------
 
 
 
+import math, cv2, numpy as np, matplotlib.pyplot as plt
 from skimage.measure import block_reduce
 
-def build_heatmaps(store, H, W, token_idx=None, h8=4, w8=4):
+
+# ───────────────────────── heat-map builder ──────────────────────────
+def build_heatmaps(store, H, W, layer_idxs=None, down=4):
     """
-    Builds a per-patch attention heatmap, aggregated to (h8, w8) and upsampled to (H, W).
+    Returns (activ_maps, grad_maps) – each a list of (H,W) float32 heat-maps
+    for the layers given in `layer_idxs`.
+
+    layer_idxs : list of indices into store.forward_activations / backward_gradients.
+                 If None → [0, middle, last].
+
+    down       : integer block-average factor to make maps less noisy.
     """
-    if not store.store:
-        raise ValueError("No attention maps collected!")
-    t = store.store[0]  # (heads·batch, Q, K)
-    # Reduce to (Q,) vector (mean across heads and keys)
-    if t.ndim == 3:
-        attn_patch = t.mean(0).mean(1)  # (Q,)
-    elif t.ndim == 2:
-        attn_patch = t.mean(1)  # (Q,)
-    else:
-        raise ValueError(f"Unexpected attention map shape: {t.shape}")
+    acts  = store.forward_activations
+    grads = store.backward_gradients
+    if not acts or not grads:
+        raise ValueError("Run a forward + backward pass first – no data in AttnStore.")
+    if layer_idxs is None:
+        layer_idxs = [0, len(acts)//2, len(acts)-1]
 
-    # Infer patch grid size (input is usually 64x64 or 96x96)
-    Q = attn_patch.shape[0]
-    patch_grid_size = int(np.sqrt(Q))
-    if patch_grid_size * patch_grid_size != Q:
-        raise ValueError(f"Cannot infer square grid for Q={Q}.")
-    heat = attn_patch.detach().cpu().numpy().astype(np.float32)
-    heat = np.nan_to_num(heat, nan=0.0, posinf=0.0, neginf=0.0)
-    heat = heat.reshape((patch_grid_size, patch_grid_size))  # Now shape (patch_grid_size, patch_grid_size)
+    def _tensor_to_map(t, down_factor):
+        v = t.mean(0).mean(1)                         # heads⋅batch → (Q,)
+        k = int(math.sqrt(v.numel()))                 # square grid
+        arr = v.view(k, k).detach().cpu().float().numpy()
 
-    # Block-average to h8 x w8 (e.g. 4x4)
-    block_h = patch_grid_size // h8
-    block_w = patch_grid_size // w8
-    heat = block_reduce(heat, block_size=(block_h, block_w), func=np.mean)  # Shape (h8, w8)
+        # coarse pooling for clarity
+        if down_factor > 1:
+            arr = block_reduce(arr, (k // down_factor, k // down_factor), np.mean)
 
-    # Normalize
-    min_val, max_val = np.nanmin(heat), np.nanmax(heat)
-    if max_val - min_val > 1e-8:
-        heat = (heat - min_val) / (max_val - min_val)
-    else:
-        heat = np.zeros_like(heat, dtype=np.float32)
+        # normalise
+        arr -= arr.min()
+        if arr.max() > 1e-8:
+            arr /= arr.max()
+        # resize to full image resolution
+        arr = cv2.resize(arr, (W, H), interpolation=cv2.INTER_NEAREST)
+        return np.clip(arr, 0, 1)
 
-    # Upsample to image size as large sharp patches
-    heat = cv2.resize(heat, (W, H), interpolation=cv2.INTER_NEAREST)
-    heat = np.clip(heat, 0, 1)
-    return heat
+    activ_maps = [_tensor_to_map(acts[i],  down) for i in layer_idxs]
+    grad_maps  = [_tensor_to_map(grads[i], down) for i in layer_idxs]
+
+    return activ_maps, grad_maps, layer_idxs
 
 
-
-def overlay(img_pil, heat, alpha=0.6):
+# ───────────────────────── overlay & plot ────────────────────────────
+def overlay_heatmaps(img_pil, activ_maps, grad_maps, layer_idxs, alpha=0.6):
     """
-    Overlays a (H,W) heatmap onto a PIL RGB image.
+    Shows a 2 × N figure (N = len(layer_idxs)):
+      • top row  – activations overlay
+      • bottom row – Grad-CAM gradients overlay
     """
-    # Ensure img_pil is RGB
-    img_pil = img_pil.convert("RGB")
-    # Prepare heatmap
-    heat_uint8 = (heat * 255).astype(np.uint8)
-    heatmap = cv2.applyColorMap(heat_uint8, cv2.COLORMAP_JET)
-    heatmap = cv2.cvtColor(heatmap, cv2.COLOR_BGR2RGB)
-    heatmap = Image.fromarray(heatmap).resize(img_pil.size, Image.BILINEAR)
-    # Blend
-    blended = Image.blend(img_pil, heatmap, alpha)
-    return blended
+    img = np.array(img_pil.convert("RGB"), dtype=np.float32) / 255.0
+    n   = len(layer_idxs)
+    fig, axes = plt.subplots(2, n, figsize=(4*n, 8))
+
+    for col in range(n):
+        for row, heat in enumerate((activ_maps[col], grad_maps[col])):
+            # colourise heat-map
+            heat_rgb = cv2.applyColorMap((heat*255).astype(np.uint8), cv2.COLORMAP_JET)
+            heat_rgb = cv2.cvtColor(heat_rgb, cv2.COLOR_BGR2RGB) / 255.0
+            blended  = (1 - alpha) * img + alpha * heat_rgb
+
+            axes[row, col].imshow(blended)
+            axes[row, col].axis('off')
+            tag = "Act" if row == 0 else "Grad"
+            axes[row, col].set_title(f"{tag} – layer {layer_idxs[col]}")
+
+    plt.tight_layout()
+    return fig
+
 
 
 
@@ -626,25 +642,11 @@ def main(opt):
                         img = put_watermark(img, wm_encoder)
                         img.save(os.path.join(sample_path, f"{base_count:05}.png"))
                         
-                        try:
-                            # build heat-maps once for this prompt batch
-                            heat = build_heatmaps(attn, opt.H, opt.W, token_idx=None, h8=opt.H // 8, w8=opt.W // 8)
-
-
-
-                            overlay_img = overlay(img, heat)
-                            overlay_img.save(os.path.join(sample_path, f"{base_count:05}_attn.png"))
-                            
-                            heat2 = build_heatmaps(attn, opt.H, opt.W, token_idx=None, h8=4, w8=4)
-
-
-
-                            overlay_img2 = overlay(img, heat2)
-                            overlay_img2.save(os.path.join(sample_path, f"{base_count:05}_attn_blocks.png"))
-                        except Exception as e:
-                            print(f"Error creating attention overlay: {e}")
-                            # Save the image without overlay as a fallback
-                            img.save(os.path.join(sample_path, f"{base_count:05}_attn_failed.png"))
+                       # after backward() has populated gradients
+                        activ, grads, chosen = build_heatmaps(attn, opt.H, opt.W, layer_idxs=None, down=4)
+                        fig = overlay_heatmaps(img, activ, grads, chosen, alpha=0.6)
+                        fig.savefig(os.path.join(sample_path, f"{base_count:05}_grad.png"))
+                        plt.close(fig)
 
                         base_count += 1
                         sample_count += 1
