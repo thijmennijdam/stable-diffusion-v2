@@ -309,8 +309,9 @@ class DDPM(pl.LightningModule):
         posterior_log_variance_clipped = extract_into_tensor(self.posterior_log_variance_clipped, t, x_t.shape)
         return posterior_mean, posterior_variance, posterior_log_variance_clipped
 
-    def p_mean_variance(self, x, t, clip_denoised: bool):
-        model_out = self.model(x, t)
+    def p_mean_variance(self, x, t, clip_denoised: bool, timestep_fraction=None):
+        model_out = self.model(x, t, timestep_fraction=timestep_fraction)
+        # model_out = self.model.apply_model(x, t, timestep_fraction=timestep_fraction)
         if self.parameterization == "eps":
             x_recon = self.predict_start_from_noise(x, t=t, noise=model_out)
         elif self.parameterization == "x0":
@@ -324,7 +325,9 @@ class DDPM(pl.LightningModule):
     @torch.no_grad()
     def p_sample(self, x, t, clip_denoised=True, repeat_noise=False):
         b, *_, device = *x.shape, x.device
-        model_mean, _, model_log_variance = self.p_mean_variance(x=x, t=t, clip_denoised=clip_denoised)
+        # Calculate timestep fraction similar to DDIM
+        timestep_fraction = float(t[0].item()) / float(self.num_timesteps - 1)
+        model_mean, _, model_log_variance = self.p_mean_variance(x=x, t=t, clip_denoised=clip_denoised, timestep_fraction=timestep_fraction)
         noise = noise_like(x.shape, device, repeat_noise)
         # no noise when t == 0
         nonzero_mask = (1 - (t == 0).float()).reshape(b, *((1,) * (len(x.shape) - 1)))
@@ -696,47 +699,78 @@ class LatentDiffusion(DDPM):
             raise NotImplementedError(f"encoder_posterior of type '{type(encoder_posterior)}' not yet implemented")
         return self.scale_factor * z
 
-    def get_learned_conditioning(self, c, ref_image=None, timestep_fraction=None):
-        print(f"DEBUG: get_learned_conditioning called with timestep_fraction: {timestep_fraction}")
-        print(f"DEBUG: Current timestep range: {self.timestep_cond_start} - {self.timestep_cond_end}")
+    def get_learned_conditioning(self, c, ref_image=None):
+        print(f"DEBUG: get_learned_conditioning input c type: {type(c)}")
 
+        # Get the base text conditioning
         if self.cond_stage_forward is None:
             if hasattr(self.cond_stage_model, 'encode') and callable(self.cond_stage_model.encode):
-                c = self.cond_stage_model.encode(c)
-                if isinstance(c, DiagonalGaussianDistribution):
-                    c = c.mode()
+                text_cond = self.cond_stage_model.encode(c)
+                if isinstance(text_cond, DiagonalGaussianDistribution):
+                    text_cond = text_cond.mode()
             else:
-                c = self.cond_stage_model(c)
+                text_cond = self.cond_stage_model(c)
         else:
             assert hasattr(self.cond_stage_model, self.cond_stage_forward)
-            c = getattr(self.cond_stage_model, self.cond_stage_forward)(c)
-
-        ## --------- Visual Concept Fusion implementation --------- ##
-        if self.use_ref_img and ref_image is not None:
-            # Only apply blending if current timestep is within the specified range
-            # or if timestep_fraction is None (for backward compatibility)
-            apply_ref_img = (timestep_fraction is None or 
-                            (self.timestep_cond_start <= timestep_fraction <= self.timestep_cond_end))
-            
-            print(f"DEBUG: Apply reference image conditioning: {apply_ref_img}")
-
-            if apply_ref_img:
-                print(f"DEBUG: APPLYING reference image at timestep {timestep_fraction}")
-                ref_image = ref_image.to(self.device)
-                # Extract and normalize CLIP image features
-                image_features = self.clip_model(ref_image)  # [B, D]
-                image_features = self.image_to_text_aligner(image_features).squeeze(0)  # [N_patch, D]
-                image_features = image_features.mean(dim=0)  # [D]
-                print(f"Image features shape: {image_features.shape}")
-                print(f"Text features shape: {c.shape}")
-                # Blend text and image features
-                alpha = self.ref_blend_weight
-                c = (1 - alpha) * c + alpha * image_features
-            else:
-                print(f"DEBUG: Not applying reference image at timestep {timestep_fraction}")
-        ## --------- End of Visual Concept Fusion implementation --------- ##
+            text_cond = getattr(self.cond_stage_model, self.cond_stage_forward)(c)
         
-        return c
+        # Store original text conditioning and reference image for dynamic use during diffusion
+        if self.use_ref_img and ref_image is not None:
+            self.stored_text_cond = text_cond.clone()  # Store original
+            self.stored_ref_image = ref_image.clone()  # Store reference image
+            print(f"DEBUG: Stored text_cond shape: {self.stored_text_cond.shape}")
+            print(f"DEBUG: Stored ref_image shape: {self.stored_ref_image.shape}")
+            print(f"DEBUG: Dynamic blending will be applied during diffusion steps")
+        
+            # For now, return text conditioning without blending
+            # The blending will happen dynamically during diffusion steps
+            return text_cond
+        
+        return text_cond
+   
+    # def get_learned_conditioning(self, c, ref_image=None, timestep_fraction=None):
+
+    #     print(f"DEBUG: get_learned_conditioning input c type: {type(c)}")
+    #     print(f"DEBUG: get_learned_conditioning input timestep_fraction: {timestep_fraction}")
+    
+
+    #     if self.cond_stage_forward is None:
+    #         if hasattr(self.cond_stage_model, 'encode') and callable(self.cond_stage_model.encode):
+    #             c = self.cond_stage_model.encode(c)
+    #             if isinstance(c, DiagonalGaussianDistribution):
+    #                 c = c.mode()
+    #         else:
+    #             c = self.cond_stage_model(c)
+    #     else:
+    #         assert hasattr(self.cond_stage_model, self.cond_stage_forward)
+    #         c = getattr(self.cond_stage_model, self.cond_stage_forward)(c)
+
+    #     ## --------- Visual Concept Fusion implementation --------- ##
+    #     if self.use_ref_img and ref_image is not None:
+    #         # Only apply blending if current timestep is within the specified range
+    #         # or if timestep_fraction is None (for backward compatibility)
+    #         apply_ref_img = (timestep_fraction is None or 
+    #                         (self.timestep_cond_start <= timestep_fraction <= self.timestep_cond_end))
+            
+    #         print(f"DEBUG: Apply reference image conditioning: {apply_ref_img}")
+
+    #         if apply_ref_img:
+    #             print(f"DEBUG: APPLYING reference image at timestep {timestep_fraction}")
+    #             ref_image = ref_image.to(self.device)
+    #             # Extract and normalize CLIP image features
+    #             image_features = self.clip_model(ref_image)  # [B, D]
+    #             image_features = self.image_to_text_aligner(image_features).squeeze(0)  # [N_patch, D]
+    #             image_features = image_features.mean(dim=0)  # [D]
+    #             print(f"Image features shape: {image_features.shape}")
+    #             print(f"Text features shape: {c.shape}")
+    #             # Blend text and image features
+    #             alpha = self.ref_blend_weight
+    #             c = (1 - alpha) * c + alpha * image_features
+    #         else:
+    #             print(f"DEBUG: Not applying reference image at timestep {timestep_fraction}")
+    #     ## --------- End of Visual Concept Fusion implementation --------- ##
+        
+    #     return c
     
     def set_timestep_range(self, start, end):
         """
@@ -924,19 +958,169 @@ class LatentDiffusion(DDPM):
                 c = self.q_sample(x_start=c, t=tc, noise=torch.randn_like(c.float()))
         return self.p_losses(x, c, t, *args, **kwargs)
 
+    # def apply_model(self, x_noisy, t, cond, return_ids=False, timestep_fraction=None):
+    #     if isinstance(cond, dict):
+    #         print("this is an instance of dict")
+    #         # hybrid case, cond is expected to be a dict
+    #         pass
+    #     else:
+    #         print("this is an instance of list")
+    #         if not isinstance(cond, list):
+    #             print("this is not an instance of list")
+    #             cond = [cond]
+    #         key = 'c_concat' if self.model.conditioning_key == 'concat' else 'c_crossattn'
+    #         cond = {key: cond}
+
+    #     x_recon = self.model(x_noisy, t, **cond, timestep_fraction=timestep_fraction)
+    #     print(f"DEBUG: x_recon type includes timestep_fraction: {timestep_fraction}")
+    #     if isinstance(x_recon, tuple) and not return_ids:
+    #         return x_recon[0]
+    #     else:
+    #         return x_recon
+    
+    # def apply_model(self, x_noisy, t, cond, return_ids=False, timestep_fraction=None):
+    #     print(f"DEBUG: apply_model received timestep_fraction: {timestep_fraction}")
+        
+    #     # If we have reference image conditioning enabled and timestep_fraction is provided,
+    #     # recompute conditioning dynamically
+    #     if (self.use_ref_img and 
+    #         hasattr(self, 'stored_text_cond') and 
+    #         hasattr(self, 'stored_ref_image') and 
+    #         timestep_fraction is not None):
+            
+    #         # Check if we should apply reference conditioning at this timestep
+    #         apply_ref_img = (self.timestep_cond_start <= timestep_fraction <= self.timestep_cond_end)
+    #         print(f"DEBUG: Diffusion step timestep_fraction: {timestep_fraction}, apply_ref: {apply_ref_img}")
+            
+    #         if apply_ref_img:
+    #             # Recompute conditioning with reference image
+    #             ref_image = self.stored_ref_image.to(self.device)
+    #             image_features = self.clip_model(ref_image)
+    #             image_features = self.image_to_text_aligner(image_features).squeeze(0)
+    #             image_features = image_features.mean(dim=0)
+                
+    #             alpha = self.ref_blend_weight
+    #             # Apply blending to the original text conditioning
+    #             if isinstance(cond, dict):
+    #                 # Assuming crossattn conditioning
+    #                 blended_cond = (1 - alpha) * self.stored_text_cond + alpha * image_features
+    #                 cond = dict(cond)  # Copy to avoid modifying original
+    #                 cond['c_crossattn'] = [blended_cond]
+    #             else:
+    #                 # Direct conditioning case
+    #                 blended_cond = (1 - alpha) * self.stored_text_cond + alpha * image_features
+    #                 cond = [blended_cond]
+    #         else:
+    #             # Use original text conditioning without reference image
+    #             if isinstance(cond, dict):
+    #                 cond = dict(cond)
+    #                 cond['c_crossattn'] = [self.stored_text_cond]
+    #             else:
+    #                 cond = [self.stored_text_cond]
+        
+    #     # Rest of the original method
+    #     if isinstance(cond, dict):
+    #         pass
+    #     else:
+    #         if not isinstance(cond, list):
+    #             cond = [cond]
+    #         key = 'c_concat' if self.model.conditioning_key == 'concat' else 'c_crossattn'
+    #         cond = {key: cond}
+
+    #     x_recon = self.model(x_noisy, t, **cond, timestep_fraction=timestep_fraction)
+        
+    #     if isinstance(x_recon, tuple) and not return_ids:
+    #         return x_recon[0]
+    #     else:
+    #         return x_recon
+
     def apply_model(self, x_noisy, t, cond, return_ids=False, timestep_fraction=None):
         print(f"DEBUG: apply_model received timestep_fraction: {timestep_fraction}")
+        print(f"DEBUG: Initial cond type: {type(cond)}")
+        if hasattr(cond, 'shape'):
+            print(f"DEBUG: Initial cond shape: {cond.shape}")
+        
+        # Apply dynamic reference image conditioning based on diffusion timestep
+        if (self.use_ref_img and 
+            hasattr(self, 'stored_text_cond') and 
+            hasattr(self, 'stored_ref_image') and 
+            timestep_fraction is not None):
+            
+            # Check if current diffusion timestep is in conditioning range
+            apply_ref_img = (self.timestep_cond_start <= timestep_fraction <= self.timestep_cond_end)
+            print(f"DEBUG: Diffusion timestep {timestep_fraction:.3f}, apply_ref: {apply_ref_img}")
+            
+            if apply_ref_img:
+                # Extract reference image features
+                ref_image = self.stored_ref_image.to(self.device)
+                image_features = self.clip_model(ref_image)
+                image_features = self.image_to_text_aligner(image_features)
+                
+                # Handle the aligner output - make it [D] like original implementation
+                if image_features.dim() == 3:  # [B, N_patches, D]
+                    image_features = image_features.mean(dim=(0, 1))  # [D]
+                elif image_features.dim() == 2:  # [N_patches, D] or [B, D]
+                    if image_features.shape[0] == 1:  # [1, D] case
+                        image_features = image_features.squeeze(0)  # [D]
+                    else:  # [N_patches, D] case
+                        image_features = image_features.mean(dim=0)  # [D]
+                
+                print(f"DEBUG: Final image_features shape: {image_features.shape}")
+                print(f"DEBUG: stored_text_cond shape: {self.stored_text_cond.shape}")
+                
+                # Apply blending using broadcasting (like original implementation)
+                alpha = self.ref_blend_weight
+                blended_text_cond = (1 - alpha) * self.stored_text_cond + alpha * image_features
+                print(f"DEBUG: Blended conditioning shape: {blended_text_cond.shape}")
+                
+                # Directly replace cond with blended conditioning
+                # Handle CFG by checking if cond has doubled batch size
+                if isinstance(cond, torch.Tensor):
+                    print(f"DEBUG: cond is tensor, replacing directly")
+                    # Check if this is CFG (doubled batch)
+                    if cond.shape[0] == self.stored_text_cond.shape[0] * 2:
+                        print(f"DEBUG: CFG detected, repeating blended conditioning")
+                        cond = blended_text_cond.repeat(2, 1, 1)
+                    else:
+                        print(f"DEBUG: Normal case, using blended conditioning as-is")
+                        cond = blended_text_cond
+                else:
+                    print(f"DEBUG: cond is not tensor, type: {type(cond)}")
+                    # Fallback for other formats - shouldn't happen based on debug output
+                    pass
+                    
+            else:
+                # Use pure text conditioning
+                print(f"DEBUG: Using pure text conditioning")
+                if isinstance(cond, torch.Tensor):
+                    # Check if this is CFG (doubled batch)  
+                    if cond.shape[0] == self.stored_text_cond.shape[0] * 2:
+                        print(f"DEBUG: CFG detected, repeating pure text conditioning")
+                        cond = self.stored_text_cond.repeat(2, 1, 1)
+                    else:
+                        print(f"DEBUG: Normal case, using pure text conditioning as-is")
+                        cond = self.stored_text_cond
+        
+        print(f"DEBUG: Final cond type before dict conversion: {type(cond)}")
+        if hasattr(cond, 'shape'):
+            print(f"DEBUG: Final cond shape before dict conversion: {cond.shape}")
+        
+        # Continue with rest of apply_model logic...
         if isinstance(cond, dict):
-            # hybrid case, cond is expected to be a dict
+            print(f"DEBUG: cond is dict, passing through")
             pass
         else:
             if not isinstance(cond, list):
+                print(f"DEBUG: Converting cond to list")
                 cond = [cond]
             key = 'c_concat' if self.model.conditioning_key == 'concat' else 'c_crossattn'
+            print(f"DEBUG: Creating dict with key: {key}")
             cond = {key: cond}
 
-        x_recon = self.model(x_noisy, t, **cond, timestep_fraction=timestep_fraction)
+        print(f"DEBUG: Final cond dict keys: {list(cond.keys()) if isinstance(cond, dict) else 'not dict'}")
 
+        x_recon = self.model(x_noisy, t, **cond, timestep_fraction=timestep_fraction)
+        
         if isinstance(x_recon, tuple) and not return_ids:
             return x_recon[0]
         else:
@@ -1416,10 +1600,10 @@ class DiffusionWrapper(pl.LightningModule):
     def forward(self, x, t, c_concat: list = None, c_crossattn: list = None, c_adm=None, timestep_fraction=None):
         print(f"DEBUG: DiffusionWrapper.forward received timestep_fraction: {timestep_fraction}")
         if self.conditioning_key is None:
-            out = self.diffusion_model(x, t)
+            out = self.diffusion_model(x, t, timestep_fraction=timestep_fraction)
         elif self.conditioning_key == 'concat':
             xc = torch.cat([x] + c_concat, dim=1)
-            out = self.diffusion_model(xc, t)
+            out = self.diffusion_model(xc, t, timestep_fraction=timestep_fraction)
         elif self.conditioning_key == 'crossattn':
             if not self.sequential_cross_attn:
                 cc = torch.cat(c_crossattn, 1)
@@ -1429,25 +1613,25 @@ class DiffusionWrapper(pl.LightningModule):
                 # TorchScript changes names of the arguments
                 # with argument cc defined as context=cc scripted model will produce
                 # an error: RuntimeError: forward() is missing value for argument 'argument_3'.
-                out = self.scripted_diffusion_model(x, t, cc)
+                out = self.scripted_diffusion_model(x, t, cc, timestep_fraction=timestep_fraction)
             else:
                 out = self.diffusion_model(x, t, context=cc, timestep_fraction=timestep_fraction)
         elif self.conditioning_key == 'hybrid':
             xc = torch.cat([x] + c_concat, dim=1)
             cc = torch.cat(c_crossattn, 1)
-            out = self.diffusion_model(xc, t, context=cc)
+            out = self.diffusion_model(xc, t, context=cc, timestep_fraction=timestep_fraction)
         elif self.conditioning_key == 'hybrid-adm':
             assert c_adm is not None
             xc = torch.cat([x] + c_concat, dim=1)
             cc = torch.cat(c_crossattn, 1)
-            out = self.diffusion_model(xc, t, context=cc, y=c_adm)
+            out = self.diffusion_model(xc, t, context=cc, y=c_adm, timestep_fraction=timestep_fraction)
         elif self.conditioning_key == 'crossattn-adm':
             assert c_adm is not None
             cc = torch.cat(c_crossattn, 1)
-            out = self.diffusion_model(x, t, context=cc, y=c_adm)
+            out = self.diffusion_model(x, t, context=cc, y=c_adm, timestep_fraction=timestep_fraction)
         elif self.conditioning_key == 'adm':
             cc = c_crossattn[0]
-            out = self.diffusion_model(x, t, y=cc)
+            out = self.diffusion_model(x, t, y=cc, timestep_fraction=timestep_fraction)
         else:
             raise NotImplementedError()
 

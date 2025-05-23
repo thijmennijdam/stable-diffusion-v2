@@ -253,12 +253,11 @@ def put_watermark(img, wm_encoder=None):
         img = Image.fromarray(img[:, :, ::-1])
     return img
 
-
 def main(opt):
     print(f"DEBUG: Command line args: timestep_cond_start={opt.timestep_cond_start}, timestep_cond_end={opt.timestep_cond_end}")
 
     seed_everything(opt.seed)
-    # Set project and entity name from environment variables
+    # Set project and entity name from environment variables 
     opt.wandb_project = os.getenv("WANDB_PROJECT", "stable-diffusion-v2")
     opt.wandb_entity = os.getenv("WANDB_ENTITY", "FoMo-2025")
 
@@ -316,7 +315,6 @@ def main(opt):
     start_code = None
     if opt.fixed_code:
         start_code = torch.randn([opt.n_samples, opt.C, opt.H // opt.f, opt.W // opt.f], device=device)
-
 
     if opt.ref_img:
         if os.path.exists(opt.ref_img):
@@ -481,6 +479,7 @@ def main(opt):
                         uc = model.get_learned_conditioning(batch_size * [""])
                     if isinstance(prompts, tuple):
                         prompts = list(prompts)
+
                     c = model.get_learned_conditioning(prompts, ref_image=ref_image)
                     shape = [opt.C, opt.H // opt.f, opt.W // opt.f]
 
