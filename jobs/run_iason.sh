@@ -23,7 +23,7 @@ REF_FIRST_OPTIONS=("true" "false")
 PROMPT="a photo of a cat"
 REF_IMG="data/cat.jpg"
 CONFIG="configs/stable-diffusion/v2-inference-v.yaml"
-CKPT="model_checkpoint.ckpt"
+CKPT="checkpoints/model_checkpoint.ckpt"
 
 # Path to job script
 JOB_SCRIPT="${SCRIPT_DIR}/run_single_alpha.sh"
