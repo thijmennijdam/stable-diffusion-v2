@@ -18,6 +18,7 @@ from sklearn.model_selection import train_test_split
 from typing import List, Tuple
 from ldm.modules.vcf.alignerv2 import ImageToTextAligner
 import numpy as np
+import math
 
 load_dotenv()
 PREPROJECT = True # always true since we fixed it 
@@ -42,32 +43,57 @@ class InfoNCELoss(nn.Module):
         loss_i2t = F.cross_entropy(logits, labels)
         loss_t2i = F.cross_entropy(logits.T, labels)
         return (loss_i2t + loss_t2i) / 2
-
-class CosineAlignmentLoss(nn.Module):
-    def forward(self, img_tokens, text_tokens, aligner):
-        img_mapped = F.normalize(aligner(img_tokens), dim=-1)
-        text_norm = F.normalize(text_tokens, dim=-1)
-        print(img_mapped.shape)
-        print(text_norm.shape)
-        return 1 - (img_mapped * text_norm).sum(-1).mean()
-
-class MMDLoss(nn.Module):
-    def __init__(self, sigma=1.0):
+        
+class CrossAttentionAlignLoss(torch.nn.Module):
+    def __init__(self):
         super().__init__()
-        self.sigma = sigma
 
-    def gaussian_kernel(self, x, y):
-        x = x.unsqueeze(1)  # [B, 1, N, D]
-        y = y.unsqueeze(0)  # [1, B, N, D]
-        return torch.exp(-((x - y) ** 2).mean(-1) / (2 * self.sigma ** 2))  # [B, B, N]
+    def forward(self, img_tokens, text_tokens):
+        # img_tokens: [B, N_img, D], text_tokens: [B, 77, D]
+        B, N_img, D = img_tokens.shape
+        _, N_txt, _ = text_tokens.shape
 
-    def forward(self, img_tokens, text_tokens, aligner):
-        x = aligner(img_tokens)  # [B, N, 1024]
-        y = text_tokens
-        K_xx = self.gaussian_kernel(x, x).mean()
-        K_yy = self.gaussian_kernel(y, y).mean()
-        K_xy = self.gaussian_kernel(x, y).mean()
-        return K_xx + K_yy - 2 * K_xy
+        # Normalize
+        img_tokens = F.normalize(img_tokens, dim=-1)
+        text_tokens = F.normalize(text_tokens, dim=-1)
+
+        # Compute attention from image to text
+        attn_scores = torch.matmul(img_tokens, text_tokens.transpose(-2, -1))  # [B, N_img, 77]
+        attn_scores = attn_scores / math.sqrt(D)
+        attn_weights = F.softmax(attn_scores, dim=1)  # [B, N_img, 77], normalize over image tokens
+
+        # Reconstruct each text token as weighted sum over image tokens
+        recon_text = torch.matmul(attn_weights.transpose(1, 2), img_tokens)  # [B, 77, D]
+
+        # Compute token-wise alignment loss
+        loss = F.mse_loss(recon_text, text_tokens)
+        return loss
+    
+# class CosineAlignmentLoss(nn.Module):
+#     def forward(self, img_tokens, text_tokens, aligner):
+#         img_mapped = F.normalize(aligner(img_tokens), dim=-1)
+#         text_norm = F.normalize(text_tokens, dim=-1)
+#         print(img_mapped.shape)
+#         print(text_norm.shape)
+#         return 1 - (img_mapped * text_norm).sum(-1).mean()
+
+# class MMDLoss(nn.Module):
+#     def __init__(self, sigma=1.0):
+#         super().__init__()
+#         self.sigma = sigma
+
+#     def gaussian_kernel(self, x, y):
+#         x = x.unsqueeze(1)  # [B, 1, N, D]
+#         y = y.unsqueeze(0)  # [1, B, N, D]
+#         return torch.exp(-((x - y) ** 2).mean(-1) / (2 * self.sigma ** 2))  # [B, B, N]
+
+#     def forward(self, img_tokens, text_tokens, aligner):
+#         x = aligner(img_tokens)  # [B, N, 1024]
+#         y = text_tokens
+#         K_xx = self.gaussian_kernel(x, x).mean()
+#         K_yy = self.gaussian_kernel(y, y).mean()
+#         K_xy = self.gaussian_kernel(x, y).mean()
+#         return K_xx + K_yy - 2 * K_xy
     
 def prepare_dataloaders(
     dataset_names: List[str],
@@ -180,6 +206,9 @@ def evaluate_loss(
             if loss_type == "infonce":
                 mapped_img_tokens = aligner(image_features, text_features)
                 loss = loss_fn(mapped_img_tokens, text_features)
+            elif loss_type == "crossattention":
+                mapped_img_tokens = aligner(image_features)
+                loss = loss_fn(mapped_img_tokens, text_features)
             else:
                 loss = loss_fn(image_features, text_features, aligner)
             total_loss += loss.item()
@@ -215,8 +244,9 @@ def train_aligner(
     # print(f"Initial Validation Loss: {initial_val_loss:.4f}")
     # wandb.log({"val_loss": initial_val_loss})
     
-    optimizer = torch.optim.AdamW(aligner.parameters(), lr=args.lr)
-    scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=50000)
+    optimizer = torch.optim.AdamW(aligner.parameters(), lr=args.lr, weight_decay=0.01)
+    T_max = args.epochs * len(train_loader)
+    scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=T_max)
     os.makedirs(os.path.dirname(save_path), exist_ok=True)
 
     best_val_loss = float("inf")
@@ -234,22 +264,31 @@ def train_aligner(
             if loss_type == "infonce":
                 mapped_img_tokens = aligner(image_features, text_features)
                 loss = loss_fn(mapped_img_tokens, text_features)
+            elif loss_type == "crossattention":
+                mapped_img_tokens = aligner(image_features)
+                loss = loss_fn(mapped_img_tokens, text_features)
             else:
                 loss = loss_fn(image_features, text_features, aligner)
             optimizer.zero_grad()
             loss.backward()
             torch.nn.utils.clip_grad_norm_(aligner.parameters(), 1.0)
             optimizer.step()
+            scheduler.step()
+            current_lr = optimizer.param_groups[0]['lr']
+            
             epoch_loss += loss.item()
             progress.set_postfix(loss=loss.item())
             wandb.log({
                 "train_loss_step": loss.item(),
+                "lr": current_lr,                   # ← add this line
+                
                 "epoch": epoch + 1,
                 "step": step + 1 + epoch * len(train_loader)
             })
+            
             step += 1
-            scheduler.step()
-
+            
+            
         avg_train_loss = epoch_loss / len(train_loader)
         avg_val_loss = evaluate_loss(val_loader, clip_text_encoder, clip_image_encoder, loss_fn, aligner, device, exclude_cls, loss_type)
         print(f"Epoch {epoch + 1}, Train Loss: {avg_train_loss:.4f}, Val Loss: {avg_val_loss:.4f}")
@@ -274,6 +313,16 @@ def train_aligner(
     wandb.log({"final_test_loss": final_test_loss})
 
 
+def set_seed(seed):
+    random.seed(seed)
+    np.random.seed(seed)
+    torch.manual_seed(seed)
+    if torch.cuda.is_available():
+        torch.cuda.manual_seed_all(seed)
+    torch.backends.cudnn.deterministic = True
+    torch.backends.cudnn.benchmark = False
+
+
 def parse_args() -> argparse.Namespace:
     """
     Parses command-line arguments.
@@ -285,7 +334,7 @@ def parse_args() -> argparse.Namespace:
         description="Train a text-image aligner using FrozenOpenCLIPEmbedder."
     )
     parser.add_argument("--datasets", nargs="+", default="[flickr30k]")
-    parser.add_argument("--loss", type=str, default="cosine", choices=["cosine", "infonce", "mmd"])
+    parser.add_argument("--loss", type=str, default="cosine", choices=["cosine", "infonce", "mmd", "crossattention"])
     parser.add_argument("--batch_size", type=int, default=32)
     parser.add_argument("--epochs", type=int, default=10)
     parser.add_argument("--lr", type=float, default=1e-4)
@@ -298,11 +347,13 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--exclude_cls", action="store_true", help="Exclude CLS token from image features")
     parser.add_argument("--dropout", type=float, default=0.0, help="Dropout rate for aligner MLP (default: 0.0)")
     parser.add_argument("--weight_init", type=str, default="default", choices=["default", "xavier"], help="Weight initialization for aligner MLP (default: default, or xavier)")
+    parser.add_argument("--seed", type=int, default=42, help="Random seed for reproducibility")
     return parser.parse_args()
 
 
 if __name__ == "__main__":
     args = parse_args()
+    set_seed(args.seed)
     print("Parsed arguments:")
     for arg, value in vars(args).items():
         print(f"{arg}: {value}")
@@ -324,6 +375,8 @@ if __name__ == "__main__":
         loss_function = InfoNCELoss()
     elif args.loss == "mmd":
         loss_function = MMDLoss()
+    elif args.loss == "crossattention":
+        loss_function = CrossAttentionAlignLoss()
     else:
         raise ValueError(f"Unknown loss type: {args.loss}")
     new_list_datasets = []

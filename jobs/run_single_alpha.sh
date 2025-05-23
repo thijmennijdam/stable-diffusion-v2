@@ -2,7 +2,7 @@
 #SBATCH --partition=gpu_a100
 #SBATCH --gpus=1
 #SBATCH --cpus-per-task=16
-#SBATCH --output=/home/%u/thijmen/stable-diffusion-v2/outputs/jobs/run_alpha_${ALPHA}_%A.out
+#SBATCH --output=/home/scur0548/thijmen/stable-diffusion-v2/outputs/jobs/test_aligners/run_alpha_%A.out
 #SBATCH --time=01:00:00
 #SBATCH --mem=40G
 

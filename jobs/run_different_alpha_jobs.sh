@@ -5,14 +5,16 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ROOT_DIR="${SCRIPT_DIR}/.."
 
 # List of alpha values
-ALPHAS=(0 0.01 0.05 0.1 0.15 0.2)
+# ALPHAS=(0 0.01 0.05 0.1 0.15 0.2)
+ALPHAS=(0 0.1 0.3 0.5 0.8)
 
 # List of aligner models
 ALIGNER_MODELS=(
-  "/scratch-shared/holy-triangle/weights/img2text_aligner_fixed/flickr30k_cosine/model_best.pth"
-  "/scratch-shared/holy-triangle/weights/img2text_aligner_fixed/flickr30k_infonce/model_best.pth"
-  "/scratch-shared/holy-triangle/weights/img2text_aligner_fixed_no_cls/flickr30k_cosine/model_best.pth"
-  "/scratch-shared/holy-triangle/weights/img2text_aligner_fixed_no_cls/flickr30k_infonce/model_best.pth"
+#   "/scratch-shared/holy-triangle/weights/img2text_aligner_fixed/flickr30k_cosine/model_best.pth"
+#   "/scratch-shared/holy-triangle/weights/img2text_aligner_fixed/flickr30k_infonce/model_best.pth"
+#   "/scratch-shared/holy-triangle/weights/img2text_aligner_fixed_no_cls/flickr30k_cosine/model_best.pth"
+#   "/scratch-shared/holy-triangle/weights/img2text_aligner_fixed_no_cls/flickr30k_infonce/model_best.pth"
+    "test/test_best.pth"
 )
 
 # Inference arguments
