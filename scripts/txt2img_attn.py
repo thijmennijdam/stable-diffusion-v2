@@ -65,15 +65,19 @@ class AttnStore:
         self.layer_idxs = layer_idxs
 
         # dicts keyed by layer index → single tensor
-        self.attn_vis_maps       = {}
-        self.forward_activations = {}
-        self.backward_gradients  = {}
+        self.attn_vis_maps       = {}  # this is the attention map
+        self.forward_activations = {}  # this is the activation map
+        self.backward_gradients  = {}  # this is the gradient map
         self.hooks = []
+        
+        # for every layer, register a forward and backward hook
+        # we use lambda and not method because we want to pass the layer index
+        # and not the layer itself
         for li, layer in zip(layer_idxs, self.targets):
             self.hooks.append(layer.register_forward_hook(
-                lambda m, i, o, key=li: self._fwd(key, o)))
+                lambda m, i, o, key=li: self._fwd(key, o)))  # m, i, o = module, input, output
             self.hooks.append(layer.register_backward_hook(
-                lambda m, gi, go, key=li: self._bwd(key, go)))
+                lambda m, gi, go, key=li: self._bwd(key, go)))  # m, gi, go = module, grad_input, grad_output
 
     def _fwd(self, key, out):
         attn = out[1]                   # (heads·B, Q, K)
