@@ -235,6 +235,13 @@ def parse_args():
         action='store_true',
         help="If set, reference image features will be concatenated before text features",
     )
+    parser.add_argument(
+        "--fusion_token_type",
+        type=str,
+        default="all",
+        choices=["cls_only", "except_cls", "all"],
+        help="Which image tokens to use for fusion: 'cls_only' (just CLS token), 'except_cls' (all except CLS), 'all' (all tokens)"
+    )
     
     opt = parser.parse_args()
     return opt
@@ -266,6 +273,7 @@ def main(opt):
         model.create_ref_img_encoder()
         model.create_image_to_text_aligner(opt.aligner_model_path)
         model.ref_first = opt.ref_first
+        model.fusion_token_type = opt.fusion_token_type
 
     if opt.plms:
         sampler = PLMSSampler(model, device=device)
@@ -404,7 +412,7 @@ def main(opt):
     )
 
     opt.loss = "cosine" if "cosine" in opt.aligner_model_path else "infonce"
-    opt.exclude_cls = True
+    opt.exclude_cls = True if opt.fusion_token_type == "except_cls" else False
     opt.create_date = datetime.now().strftime("%d-%m-%Y_%H-%M-%S")
 
     wandb.init(

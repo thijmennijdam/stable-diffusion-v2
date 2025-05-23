@@ -536,7 +536,8 @@ class LatentDiffusion(DDPM):
                  force_null_conditioning=False,
                  use_ref_img=False,
                  ref_blend_weight=0.05,  # Add control for text-image blending
-                 ref_first=False,  # Add this parameter
+                 ref_first=False,  # Add this parameter,
+                 fusion_token_type="all",  # New parameter: "cls_only", "except_cls", "all"
                  *args, **kwargs):
         self.force_null_conditioning = force_null_conditioning
         self.num_timesteps_cond = default(num_timesteps_cond, 1)
@@ -587,9 +588,10 @@ class LatentDiffusion(DDPM):
         self.use_ref_img = use_ref_img
         self.ref_blend_weight = ref_blend_weight
         self.ref_first = ref_first  # Add this line
+        self.fusion_token_type = fusion_token_type
 
         if self.use_ref_img:
-            self.create_ref_img_encoder()
+            self.create_ref_img_encoder()            
 
 
     def create_ref_img_encoder(self):
@@ -709,19 +711,37 @@ class LatentDiffusion(DDPM):
         if self.use_ref_img and ref_image is not None:
             ref_image = ref_image.to(self.device)
 
-            # Extract and normalize CLIP image features
-            image_features = self.clip_model(ref_image) # [B, D]
-            image_features = self.image_to_text_aligner(image_features).squeeze(0) # [N_patch, D]
-            image_token = image_features.unsqueeze(0) # [1, N_patch, D]
+            # Configure exclude_cls based on fusion_token_type
+            if self.fusion_token_type == "cls_only":
+                exclude_cls = False  # Get all tokens including CLS
+            elif self.fusion_token_type == "except_cls":
+                exclude_cls = True   # Exclude CLS token (current default)
+            elif self.fusion_token_type == "all":
+                exclude_cls = False  # Get all tokens including CLS
+            else:
+                raise ValueError(f"Invalid fusion_token_type: {self.fusion_token_type}. "
+                               f"Must be one of: 'cls_only', 'except_cls', 'all'")
+
+            # Extract CLIP image features with appropriate exclude_cls setting
+            image_features = self.clip_model(ref_image, exclude_cls=exclude_cls)  # [B, N_tokens, D]
+            image_features = self.image_to_text_aligner(image_features).squeeze(0)  # [N_tokens, D]
+            
+            # Apply additional token filtering if needed
+            if self.fusion_token_type == "cls_only":
+                # Use only the first token (CLS token)
+                image_features = image_features[:1, :]  # [1, D]
+            # For "except_cls" and "all", no additional filtering needed as exclude_cls handles it
+            
+            image_token = image_features.unsqueeze(0)  # [1, N_selected, D]
 
             # Replicate image token to match batch size
-            image_token = image_token.repeat(c.shape[0], 1, 1) # [B, N_patch, D]
+            image_token = image_token.repeat(c.shape[0], 1, 1)  # [B, N_selected, D]
             
             # Concatenate with text features based on ref_first flag
             if self.ref_first:
-                c = torch.cat([image_token, c], dim=1) # [B, N_patch+77, D]
+                c = torch.cat([image_token, c], dim=1)  # [B, N_selected+77, D]
             else:
-                c = torch.cat([c, image_token], dim=1) # [B, 77+N_patch, D]
+                c = torch.cat([c, image_token], dim=1)  # [B, 77+N_selected, D]
 
         return c
     
