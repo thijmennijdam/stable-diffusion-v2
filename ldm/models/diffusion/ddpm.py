@@ -19,6 +19,8 @@ from tqdm import tqdm
 from torchvision.utils import make_grid
 from pytorch_lightning.utilities.distributed import rank_zero_only
 from omegaconf import ListConfig
+import math
+import torch.nn.functional as F
 
 from ldm.util import log_txt_as_img, exists, default, ismap, isimage, mean_flat, count_params, instantiate_from_config
 from ldm.modules.ema import LitEma
@@ -537,7 +539,8 @@ class LatentDiffusion(DDPM):
                  use_ref_img=False,
                  ref_blend_weight=0.05,  # Add control for text-image blending
                  ref_first=False,  # Add this parameter,
-                 fusion_token_type="all",  # New parameter: "cls_only", "except_cls", "all"
+                 use_cross_attention_fusion=False,  
+                 fusion_token_type="all", # "cls_only", "except_cls", "all"
                  *args, **kwargs):
         self.force_null_conditioning = force_null_conditioning
         self.num_timesteps_cond = default(num_timesteps_cond, 1)
@@ -588,11 +591,13 @@ class LatentDiffusion(DDPM):
         self.use_ref_img = use_ref_img
         self.ref_blend_weight = ref_blend_weight
         self.ref_first = ref_first  # Add this line
+        self.use_cross_attention_fusion = use_cross_attention_fusion
         self.fusion_token_type = fusion_token_type
 
         if self.use_ref_img:
-            self.create_ref_img_encoder()            
-
+            self.create_ref_img_encoder()
+            if self.use_cross_attention_fusion:
+                self.cross_attention_fusion = CrossAttentionFusion(dim=1024)
 
     def create_ref_img_encoder(self):
         print("Using CLIP model for reference image encoding.")
@@ -715,7 +720,7 @@ class LatentDiffusion(DDPM):
             if self.fusion_token_type == "cls_only":
                 exclude_cls = False  # Get all tokens including CLS
             elif self.fusion_token_type == "except_cls":
-                exclude_cls = True   # Exclude CLS token (current default)
+                exclude_cls = True   # Exclude CLS token
             elif self.fusion_token_type == "all":
                 exclude_cls = False  # Get all tokens including CLS
             else:
@@ -733,15 +738,18 @@ class LatentDiffusion(DDPM):
             # For "except_cls" and "all", no additional filtering needed as exclude_cls handles it
             
             image_token = image_features.unsqueeze(0)  # [1, N_selected, D]
-
             # Replicate image token to match batch size
             image_token = image_token.repeat(c.shape[0], 1, 1)  # [B, N_selected, D]
             
-            # Concatenate with text features based on ref_first flag
-            if self.ref_first:
-                c = torch.cat([image_token, c], dim=1)  # [B, N_selected+77, D]
+            if self.use_cross_attention_fusion:
+                # Use cross-attention fusion instead of concatenation
+                c = self.cross_attention_fusion(c, image_token)  # [B, 77, D] -> [B, 77, D]
             else:
-                c = torch.cat([c, image_token], dim=1)  # [B, 77+N_selected, D]
+                # Original concatenation approach
+                if self.ref_first:
+                    c = torch.cat([image_token, c], dim=1)  # [B, N_selected+77, D]
+                else:
+                    c = torch.cat([c, image_token], dim=1)  # [B, 77+N_selected, D]
 
         return c
     
@@ -1964,3 +1972,26 @@ class ImageEmbeddingConditionedLatentDiffusion(LatentDiffusion):
             x_samples_cfg = self.decode_first_stage(samples_cfg)
             log[f"samplescfg_scale_{unconditional_guidance_scale:.2f}"] = x_samples_cfg
         return log
+
+class CrossAttentionFusion(nn.Module):
+    def __init__(self, dim=1024):
+        super().__init__()
+        self.scale = math.sqrt(dim)
+
+    def forward(self, text_tokens, image_tokens):
+        # text_tokens: [B, 77, D] (queries)
+        # image_tokens: [B, N_img, D] (keys and values)
+
+        # Normalize for stability
+        text_tokens = F.normalize(text_tokens, dim=-1)
+        image_tokens = F.normalize(image_tokens, dim=-1)
+
+        # Compute dot-product attention
+        attn_scores = torch.matmul(text_tokens, image_tokens.transpose(-2, -1))  # [B, 77, N_img]
+        attn_scores = attn_scores / self.scale
+        attn_weights = F.softmax(attn_scores, dim=-1)  # [B, 77, N_img]
+
+        # Attend image context
+        fused_tokens = torch.matmul(attn_weights, image_tokens)  # [B, 77, D]
+
+        return fused_tokens

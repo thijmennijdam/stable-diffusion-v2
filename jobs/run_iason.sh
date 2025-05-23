@@ -13,11 +13,11 @@ ALIGNER_MODELS=(
   "/scratch-shared/holy-triangle/weights/img2text_aligner_fixed/flickr30k_infonce/model_best.pth"
 )
 
-# List of fusion token types (leveraging existing exclude_cls parameter)
+# List of fusion token types
 FUSION_TOKEN_TYPES=("cls_only" "except_cls" "all")
 
-# List of ref_first options
-REF_FIRST_OPTIONS=("true" "false")
+# List of fusion methods
+FUSION_METHODS=("concat" "cross_attention")
 
 # Inference arguments
 PROMPT="a photo of a cat"
@@ -28,12 +28,22 @@ CKPT="checkpoints/model_checkpoint.ckpt"
 # Path to job script
 JOB_SCRIPT="${SCRIPT_DIR}/run_single_alpha.sh"
 
+# Create logs directory if it doesn't exist
+mkdir -p "${SCRIPT_DIR}/../logs"
+
+echo "Starting experiment with:"
+echo "  - Alpha values: ${ALPHAS[*]}"
+echo "  - Fusion token types: ${FUSION_TOKEN_TYPES[*]}"
+echo "  - Fusion methods: ${FUSION_METHODS[*]}"
+echo "  - Total jobs: $((${#ALPHAS[@]} * ${#ALIGNER_MODELS[@]} * ${#FUSION_TOKEN_TYPES[@]} * ${#FUSION_METHODS[@]}))"
+echo ""
+
 for ALIGNER_MODEL in "${ALIGNER_MODELS[@]}"; do
   for ALPHA in "${ALPHAS[@]}"; do
     for FUSION_TOKEN_TYPE in "${FUSION_TOKEN_TYPES[@]}"; do
-      for REF_FIRST in "${REF_FIRST_OPTIONS[@]}"; do
-        echo "Submitting job with alpha=${ALPHA}, model=${ALIGNER_MODEL}, fusion_token_type=${FUSION_TOKEN_TYPE}, ref_first=${REF_FIRST}"
-        sbatch --export=ALL,ALPHA=$ALPHA,PROMPT="$PROMPT",REF_IMG="$REF_IMG",ALIGNER_MODEL="$ALIGNER_MODEL",CONFIG="$CONFIG",CKPT="$CKPT",ROOT_DIR="$ROOT_DIR",FUSION_TOKEN_TYPE="$FUSION_TOKEN_TYPE",REF_FIRST="$REF_FIRST" "$JOB_SCRIPT"
+      for FUSION_METHOD in "${FUSION_METHODS[@]}"; do
+        echo "Submitting job with alpha=${ALPHA}, model=$(basename "$ALIGNER_MODEL"), fusion_token_type=${FUSION_TOKEN_TYPE}, fusion_method=${FUSION_METHOD}"
+        sbatch --export=ALL,ALPHA=$ALPHA,PROMPT="$PROMPT",REF_IMG="$REF_IMG",ALIGNER_MODEL="$ALIGNER_MODEL",CONFIG="$CONFIG",CKPT="$CKPT",ROOT_DIR="$ROOT_DIR",FUSION_TOKEN_TYPE="$FUSION_TOKEN_TYPE",FUSION_METHOD="$FUSION_METHOD" "$JOB_SCRIPT"
       done
     done
   done

@@ -32,9 +32,9 @@ CMD="uv run python scripts/txt2img.py \
   --aligner_model_path \"$ALIGNER_MODEL\" \
   --fusion_token_type \"$FUSION_TOKEN_TYPE\""
 
-# Add ref_first flag only if REF_FIRST is "true" (don't pass the value, just the flag)
-if [ "$REF_FIRST" = "true" ]; then
-  CMD="$CMD --ref_first"
+# Add cross-attention fusion flag if FUSION_METHOD is "cross_attention"
+if [ "$FUSION_METHOD" = "cross_attention" ]; then
+  CMD="$CMD --use_cross_attention_fusion"
 fi
 
 echo "Running: $CMD"

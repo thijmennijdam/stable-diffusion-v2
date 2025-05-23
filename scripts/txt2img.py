@@ -21,6 +21,7 @@ from ldm.models.diffusion.ddim import DDIMSampler
 from ldm.models.diffusion.plms import PLMSSampler
 from ldm.models.diffusion.dpm_solver import DPMSolverSampler
 from torchvision import transforms
+from ldm.models.diffusion.ddpm import CrossAttentionFusion
 
 load_dotenv()
 
@@ -242,6 +243,11 @@ def parse_args():
         choices=["cls_only", "except_cls", "all"],
         help="Which image tokens to use for fusion: 'cls_only' (just CLS token), 'except_cls' (all except CLS), 'all' (all tokens)"
     )
+    parser.add_argument(
+        "--use_cross_attention_fusion",
+        action='store_true',
+        help="Use cross-attention fusion instead of concatenation"
+    )
     
     opt = parser.parse_args()
     return opt
@@ -274,6 +280,11 @@ def main(opt):
         model.create_image_to_text_aligner(opt.aligner_model_path)
         model.ref_first = opt.ref_first
         model.fusion_token_type = opt.fusion_token_type
+        model.use_cross_attention_fusion = opt.use_cross_attention_fusion
+        
+        # Create cross-attention fusion module if needed
+        if opt.use_cross_attention_fusion:
+            model.cross_attention_fusion = CrossAttentionFusion(dim=1024).to(model.device)
 
     if opt.plms:
         sampler = PLMSSampler(model, device=device)
