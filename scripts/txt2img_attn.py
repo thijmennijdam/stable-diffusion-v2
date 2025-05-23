@@ -44,26 +44,44 @@ uv run python scripts/txt2img_attn.py \
 """
 
 # ---------- hooks ----------
+# ──────────────────────────── 1.  AttnStore ────────────────────────────
 class AttnStore:
-    def __init__(self):
-        self.attn_vis_maps = []          # Detached attention maps (for plain visualization)
-        self.forward_activations = []    # Raw attention (before detach), needed for Grad-CAM
-        self.backward_gradients = []     # Gradients wrt attention, needed for Grad-CAM
+    """
+    Capture *one* activation / gradient (the latest DDPM step) for three
+    cross-attention layers: default = first / middle / last in the UNet.
+    """
+    def __init__(self, unet, layer_idxs=None):
+        # find every attn2 cross-attention
+        layers = [m for n, m in unet.named_modules()
+                  if "attn2" in n and any(b in n for b in
+                     ("down_blocks", "mid_block", "up_blocks"))]
+        if not layers:
+            raise ValueError("No attn2 layers found.")
 
-    def _forward_hook(self, module, input, output):
-        attn = output[1]
-        self.attn_vis_maps.append(attn.detach().cpu())   # For regular attention vis
-        self.forward_activations.append(attn)            # For Grad-CAM (retain graph)
+        if layer_idxs is None:
+            layer_idxs = [0, len(layers)//2, len(layers)-1]
 
-    def _backward_hook(self, module, grad_input, grad_output):
-        self.backward_gradients.append(grad_output[1])   # For Grad-CAM
+        self.targets    = [layers[i] for i in layer_idxs]
+        self.layer_idxs = layer_idxs
 
-    def install(self, unet):
+        # dicts keyed by layer index → single tensor
+        self.attn_vis_maps       = {}
+        self.forward_activations = {}
+        self.backward_gradients  = {}
         self.hooks = []
-        for name, m in unet.named_modules():
-            if "attn2" in name and any(b in name for b in ["down_blocks", "mid_block", "up_blocks"]):
-                self.hooks.append(m.register_forward_hook(self._forward_hook))
-                self.hooks.append(m.register_backward_hook(self._backward_hook))
+        for li, layer in zip(layer_idxs, self.targets):
+            self.hooks.append(layer.register_forward_hook(
+                lambda m, i, o, key=li: self._fwd(key, o)))
+            self.hooks.append(layer.register_backward_hook(
+                lambda m, gi, go, key=li: self._bwd(key, go)))
+
+    def _fwd(self, key, out):
+        attn = out[1]                   # (heads·B, Q, K)
+        self.attn_vis_maps[key]       = attn.detach().cpu()
+        self.forward_activations[key] = attn                 # keep graph
+
+    def _bwd(self, key, gout):
+        self.backward_gradients[key] = gout[1]
 
     def clear(self):
         self.attn_vis_maps.clear()
@@ -71,81 +89,56 @@ class AttnStore:
         self.backward_gradients.clear()
 
 
-
-# ---------- heatmap builder using t-SNE ----------
-
-
-
-import math, cv2, numpy as np, matplotlib.pyplot as plt
-from skimage.measure import block_reduce
-
-
-# ───────────────────────── heat-map builder ──────────────────────────
-def build_heatmaps(store, H, W, layer_idxs=None, down=4):
+# ───────────────────── 2.  build_heatmaps (last-step) ──────────────────
+def build_heatmaps(store, H, W, down=4):
     """
-    Returns (activ_maps, grad_maps) – each a list of (H,W) float32 heat-maps
-    for the layers given in `layer_idxs`.
-
-    layer_idxs : list of indices into store.forward_activations / backward_gradients.
-                 If None → [0, middle, last].
-
-    down       : integer block-average factor to make maps less noisy.
+    Returns activ_maps, grad_maps aligned to store.layer_idxs.
+    Each list element is an (H,W) float32 heat-map from the *last* step.
     """
-    acts  = store.forward_activations
-    grads = store.backward_gradients
-    if not acts or not grads:
-        raise ValueError("Run a forward + backward pass first – no data in AttnStore.")
-    if layer_idxs is None:
-        layer_idxs = [0, len(acts)//2, len(acts)-1]
+    import math, cv2, numpy as np
+    from skimage.measure import block_reduce
 
-    def _tensor_to_map(t, down_factor):
-        v = t.mean(0).mean(1)                         # heads⋅batch → (Q,)
-        k = int(math.sqrt(v.numel()))                 # square grid
-        arr = v.view(k, k).detach().cpu().float().numpy()
+    def _tensor_to_map(t):
+        v = t.mean(0).mean(1)                 # heads·B → (Q,)
+        k = int(math.sqrt(v.numel()))
+        m = v.view(k, k).detach().cpu().float().numpy()
+        if down > 1:
+            m = block_reduce(m, (k//down, k//down), np.mean)
+        m -= m.min()
+        if m.max() > 1e-8: m /= m.max()
+        return cv2.resize(m, (W, H), cv2.INTER_NEAREST)
 
-        # coarse pooling for clarity
-        if down_factor > 1:
-            arr = block_reduce(arr, (k // down_factor, k // down_factor), np.mean)
-
-        # normalise
-        arr -= arr.min()
-        if arr.max() > 1e-8:
-            arr /= arr.max()
-        # resize to full image resolution
-        arr = cv2.resize(arr, (W, H), interpolation=cv2.INTER_NEAREST)
-        return np.clip(arr, 0, 1)
-
-    activ_maps = [_tensor_to_map(acts[i],  down) for i in layer_idxs]
-    grad_maps  = [_tensor_to_map(grads[i], down) for i in layer_idxs]
-
-    return activ_maps, grad_maps, layer_idxs
+    activ_maps = [_tensor_to_map(store.forward_activations[i])
+                  for i in store.layer_idxs]
+    grad_maps  = [_tensor_to_map(store.backward_gradients[i])
+                  for i in store.layer_idxs]
+    return activ_maps, grad_maps, store.layer_idxs
 
 
-# ───────────────────────── overlay & plot ────────────────────────────
-def overlay_heatmaps(img_pil, activ_maps, grad_maps, layer_idxs, alpha=0.6):
+# ───────────────── 3.  overlay_heatmaps (2×N grid)  ────────────────────
+def overlay_heatmaps(img_pil, activ_maps, grad_maps, idxs, alpha=0.6):
     """
-    Shows a 2 × N figure (N = len(layer_idxs)):
-      • top row  – activations overlay
-      • bottom row – Grad-CAM gradients overlay
+    2×N subplot: top = activations, bottom = Grad-CAM gradients.
     """
-    img = np.array(img_pil.convert("RGB"), dtype=np.float32) / 255.0
-    n   = len(layer_idxs)
-    fig, axes = plt.subplots(2, n, figsize=(4*n, 8))
+    import matplotlib.pyplot as plt, cv2, numpy as np
 
-    for col in range(n):
-        for row, heat in enumerate((activ_maps[col], grad_maps[col])):
-            # colourise heat-map
-            heat_rgb = cv2.applyColorMap((heat*255).astype(np.uint8), cv2.COLORMAP_JET)
-            heat_rgb = cv2.cvtColor(heat_rgb, cv2.COLOR_BGR2RGB) / 255.0
-            blended  = (1 - alpha) * img + alpha * heat_rgb
+    img = np.asarray(img_pil.convert("RGB"), dtype=np.float32)/255.0
+    n   = len(idxs)
+    fig, ax = plt.subplots(2, n, figsize=(4*n, 8))
 
-            axes[row, col].imshow(blended)
-            axes[row, col].axis('off')
-            tag = "Act" if row == 0 else "Grad"
-            axes[row, col].set_title(f"{tag} – layer {layer_idxs[col]}")
+    for c in range(n):
+        for r, heat in enumerate((activ_maps[c], grad_maps[c])):
+            color = cv2.applyColorMap((heat*255).astype(np.uint8),
+                                      cv2.COLORMAP_JET)
+            color = cv2.cvtColor(color, cv2.COLOR_BGR2RGB)/255.0
+            blend = (1-alpha)*img + alpha*color
 
-    plt.tight_layout()
-    return fig
+            ax[r, c].imshow(blend);  ax[r, c].axis("off")
+            tag = "Act" if r==0 else "Grad"
+            ax[r, c].set_title(f"{tag} – layer {idxs[c]}")
+
+    plt.tight_layout();  return fig
+
 
 
 
@@ -625,6 +618,10 @@ def main(opt):
                                                      eta=opt.ddim_eta,
                                                      x_T=start_code,
                                                      img_callback=wandb_img_callback)
+                    
+
+                    # before decoding samples or doing anything that breaks the computation graph
+                    samples.sum().backward()  # this triggers backprop and stores gradients in hooks
 
                     x_samples = model.decode_first_stage(samples)
                     x_samples = torch.clamp((x_samples + 1.0) / 2.0, min=0.0, max=1.0)
@@ -642,10 +639,11 @@ def main(opt):
                         img = put_watermark(img, wm_encoder)
                         img.save(os.path.join(sample_path, f"{base_count:05}.png"))
                         
-                       # after backward() has populated gradients
-                        activ, grads, chosen = build_heatmaps(attn, opt.H, opt.W, layer_idxs=None, down=4)
-                        fig = overlay_heatmaps(img, activ, grads, chosen, alpha=0.6)
-                        fig.savefig(os.path.join(sample_path, f"{base_count:05}_grad.png"))
+                       
+
+                        acts, grads, idxs = build_heatmaps(attn, opt.H, opt.W)
+                        fig = overlay_heatmaps(img, acts, grads, idxs)
+                        fig.savefig(f"{sample_path}/{base_count:05}_attn.png", dpi=300)
                         plt.close(fig)
 
                         base_count += 1
