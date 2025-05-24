@@ -1,32 +1,64 @@
 #!/bin/bash
 
-# Path to project root (one level up from this script)
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-ROOT_DIR="${SCRIPT_DIR}/.."
+ROOT_DIR="/home/azywot/FOMO/stable-diffusion-v2"
 
-# List of alpha values
-ALPHAS=(0 0.01 0.05 0.1 0.15 0.2)
+# Throttling parameters
+MAX_JOBS=3
+SLEEP_TIME=60
 
-# List of aligner models
+# Function to sanitize strings for filenames and job names
+sanitize() {
+  echo "$1" | tr '/: ' '__'
+}
+
+# Function to wait until job slots are available
+wait_for_available_slot() {
+  while true; do
+    CURRENT_JOBS=$(squeue -u "$USER" -h | wc -l)
+    if (( CURRENT_JOBS < MAX_JOBS )); then
+      break
+    fi
+    TIMESTAMP=$(date +"%Y-%m-%d %H:%M:%S")
+    echo "[$TIMESTAMP] ⏳ Too many jobs queued ($CURRENT_JOBS). Waiting for available slot..."
+    sleep "$SLEEP_TIME"
+  done
+}
+
+# Alphas and model paths
+ALPHAS=(0 0.1 0.2 0.3 0.5 0.7 0.9 1.0)
 ALIGNER_MODELS=(
-  "/scratch-shared/holy-triangle/weights/img2text_aligner_fixed/flickr30k_cosine/model_best.pth"
   "/scratch-shared/holy-triangle/weights/img2text_aligner_fixed/flickr30k_infonce/model_best.pth"
-  "/scratch-shared/holy-triangle/weights/img2text_aligner_fixed_no_cls/flickr30k_cosine/model_best.pth"
-  "/scratch-shared/holy-triangle/weights/img2text_aligner_fixed_no_cls/flickr30k_infonce/model_best.pth"
 )
 
 # Inference arguments
 PROMPT="a photo of a cat"
-REF_IMG="data/cat.jpg"
-CONFIG="configs/stable-diffusion/v2-inference-v.yaml"
-CKPT="model_checkpoint.ckpt"
+REF_IMG="${ROOT_DIR}/data/cat.jpg"
+CONFIG="${ROOT_DIR}/configs/stable-diffusion/v2-inference-v.yaml"
+CKPT="/scratch-shared/holy-triangle/weights/stable-diffusion-2-1/v2-1_768-ema-pruned.ckpt"
 
-# Path to job script
-JOB_SCRIPT="${SCRIPT_DIR}/run_single_alpha.sh"
+# Job script path
+JOB_SCRIPT="${ROOT_DIR}/jobs/run_single_alpha.sh"
 
+# Submit jobs
 for ALIGNER_MODEL in "${ALIGNER_MODELS[@]}"; do
+  SAFE_MODEL_NAME=$(sanitize "$ALIGNER_MODEL")
+  SAFE_PROMPT=$(sanitize "$PROMPT")
+
   for ALPHA in "${ALPHAS[@]}"; do
-    echo "Submitting job with alpha=${ALPHA} and model=${ALIGNER_MODEL}"
-    sbatch --export=ALL,ALPHA=$ALPHA,PROMPT="$PROMPT",REF_IMG="$REF_IMG",ALIGNER_MODEL="$ALIGNER_MODEL",CONFIG="$CONFIG",CKPT="$CKPT",ROOT_DIR="$ROOT_DIR" "$JOB_SCRIPT"
+    wait_for_available_slot
+
+    TIMESTAMP=$(date +"%Y-%m-%d %H:%M:%S")
+    echo "[$TIMESTAMP] 📤 Submitting job: alpha=$ALPHA, prompt=\"$PROMPT\""
+
+    sbatch \
+      --job-name="gen_a${ALPHA}" \
+      --output="${ROOT_DIR}/outputs/jobs/gen_a${ALPHA}_p${SAFE_PROMPT}_%A.out" \
+      --partition=gpu_h100 \
+      --gpus=1 \
+      --cpus-per-task=16 \
+      --time=00:10:00 \
+      --mem=40G \
+      --export=ALL,ALPHA=$ALPHA,PROMPT="$PROMPT",REF_IMG="$REF_IMG",ALIGNER_MODEL="$ALIGNER_MODEL",CONFIG="$CONFIG",CKPT="$CKPT",ROOT_DIR="$ROOT_DIR" \
+      "$JOB_SCRIPT"
   done
 done
