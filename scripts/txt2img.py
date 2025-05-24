@@ -16,23 +16,22 @@ from imwatermark import WatermarkEncoder
 import wandb
 from dotenv import load_dotenv
 from ldm.util import instantiate_from_config
-from ldm.models.diffusion.ddim import DDIMSampler
+from ldm.models.diffusion.ddim import DDIMSampler # Ensure this is your MODIFIED DDIMSampler
 from ldm.models.diffusion.plms import PLMSSampler
 from ldm.models.diffusion.dpm_solver import DPMSolverSampler
-from ldm.modules.encoders.modules import FrozenOpenCLIPImageEmbedder, FrozenOpenCLIPEmbedder
-from scripts.vcf.pno import optimize_pno, extract_image_features, instantiate_clip_encoders
-from torchvision import transforms
+from torchvision import transforms # Keep for standard pipeline ref_image preproc
+
+# Import PNO functions from scripts.pno
+from scripts.vcf.pno import instantiate_clip_model_for_pno_trajectory_loss, optimize_prompt_noise_trajectory
 
 load_dotenv()
-USE_PNO = True
-# torch.set_grad_enabled(False)
+# REMOVED: torch.set_grad_enabled(False)
 
-def chunk(it, size):
+def chunk(it, size): # From OLD
     it = iter(it)
     return iter(lambda: tuple(islice(it, size)), ())
 
-
-def load_model_from_config(config, ckpt, device=torch.device("cuda"), verbose=False):
+def load_model_from_config(config, ckpt, device=torch.device("cuda"), verbose=False): # From OLD
     print(f"Loading model from {ckpt}")
     pl_sd = torch.load(ckpt, map_location="cpu")
     if "global_step" in pl_sd:
@@ -57,9 +56,9 @@ def load_model_from_config(config, ckpt, device=torch.device("cuda"), verbose=Fa
     model.eval()
     return model
 
-
 def parse_args():
     parser = argparse.ArgumentParser()
+    # --- Arguments from OLD script (for consistency) ---
     parser.add_argument(
         "--prompt",
         type=str,
@@ -228,32 +227,23 @@ def parse_args():
     parser.add_argument(
         "--aligner_model_path",
         type=str,
-        default="weights/img2text_aligner/coco_cosine/model_best.pth",
+        default="weights/img2text_aligner_fixed/flickr30k_infonce/model_best.pth",
         help="Path to the aligner model. If not specified, the default model will be used.",
     )
-    # Add PNO-specific arguments
-    parser.add_argument(
-        "--pno_steps",
-        type=int,
-        default=10,
-        help="Number of PNO optimization steps",
-    )
-    parser.add_argument(
-        "--lr_prompt",
-        type=float,
-        default=1e-4,
-        help="Learning rate for prompt optimization",
-    )
-    parser.add_argument(
-        "--lr_noise",
-        type=float,
-        default=1e-4,
-        help="Learning rate for noise optimization",
-    )
+    # PNO Trajectory specific arguments
+    pno_group = parser.add_argument_group('Prompt-Noise Trajectory Optimization (PNO Trajectory)')
+    pno_group.add_argument("--use_pno_trajectory", action='store_true', help="Enable PNO trajectory optimization.")
+    pno_group.add_argument("--pno_steps", type=int, default=10, help="Number of PNO optimization steps.")
+    pno_group.add_argument("--lr_prompt", type=float, default=1e-4, help="Learning rate for prompt in PNO.")
+    pno_group.add_argument("--lr_noise", type=float, default=1e-4, help="Learning rate for noise in PNO.")
+    pno_group.add_argument("--pno_noise_reg_gamma", type=float, default=0.5, help="Weight for PNO noise regularization.")
+    pno_group.add_argument("--pno_noise_reg_k_power", type=int, default=1, help="k = 4^power for PNO regularization.")
+    pno_group.add_argument("--pno_noise_reg_shuffles", type=int, default=20, help="Shuffles for PNO noise regularization.")
+    pno_group.add_argument("--pno_disable_reg", action='store_true', help="Disable PNO noise regularization.")
+    pno_group.add_argument("--pno_clip_grad_norm", type=float, default=1.0, help="Max norm for gradient clipping in PNO (0 to disable).")
     
     opt = parser.parse_args()
     return opt
-
 
 def put_watermark(img, wm_encoder=None):
     if wm_encoder is not None:
@@ -262,7 +252,6 @@ def put_watermark(img, wm_encoder=None):
         img = Image.fromarray(img[:, :, ::-1])
     return img
 
-
 def main(opt):
     seed_everything(opt.seed)
     # Set project and entity name from environment variables
@@ -270,12 +259,10 @@ def main(opt):
     opt.wandb_entity = os.getenv("WANDB_ENTITY", "FoMo-2025")
 
     config = OmegaConf.load(f"{opt.config}")
-    
     device = torch.device("cuda") if opt.device == "cuda" else torch.device("cpu")
     model = load_model_from_config(config, f"{opt.ckpt}", device)
-    
-    # Set the blend weight for the reference image if using the reference image flow
-    if opt.ref_img and not USE_PNO:
+
+    if opt.ref_img:
         model.set_blend_weight(opt.ref_blend_weight)
         model.set_use_ref_img(True)
         model.create_ref_img_encoder()
@@ -287,6 +274,7 @@ def main(opt):
         sampler = DPMSolverSampler(model, device=device)
     else:
         sampler = DDIMSampler(model, device=device)
+        sampler.ddim_eta = opt.ddim_eta # Set eta on the sampler instance (needed for PNO)
 
     os.makedirs(opt.outdir, exist_ok=True)
     outpath = opt.outdir
@@ -326,20 +314,19 @@ def main(opt):
 
     if opt.ref_img:
         if os.path.exists(opt.ref_img):
-            if not USE_PNO:
-                ref_image = Image.open(opt.ref_img).convert("RGB")
-                ref_image = transforms.ToTensor()(ref_image).to(device).unsqueeze(0) 
-                # scale to -1 to 1
-                ref_image = (ref_image - 0.5) * 2
-            else:
-                # --- Reference image and feature extraction ---
-                openclip_image_encoder = instantiate_clip_encoders(device=device)
-                image_feat = extract_image_features(openclip_image_encoder, opt.ref_img, device=device)
-                # --- End reference image and feature extraction ---
+            ref_image = Image.open(opt.ref_img).convert("RGB")
+            ref_image = transforms.ToTensor()(ref_image).unsqueeze(0).to(device)
         else:
-            print(f"Warning: Reference image not found at {opt.ref_img}. Skipping.")
-    else:
-        ref_image = None
+            print(f"Warning: Reference image {opt.ref_img} not found.")
+            if opt.use_pno_trajectory: raise ValueError("PNO trajectory requires a valid --ref_img.")
+            ref_image = None 
+    elif opt.use_pno_trajectory:
+        raise ValueError("--ref_img is mandatory when --use_pno_trajectory is enabled.")
+    
+    clip_image_encoder_pno, clip_preprocess_pno = (None, None)
+    if opt.use_pno_trajectory:
+        print("Instantiating CLIP model for PNO trajectory loss...")
+        clip_image_encoder_pno, clip_preprocess_pno = instantiate_clip_model_for_pno_trajectory_loss(device=device)
     
     if opt.torchscript or opt.ipex:
         transformer = model.cond_stage_model.model
@@ -414,33 +401,26 @@ def main(opt):
             for _ in range(3):
                 x_samples_ddim = model.decode_first_stage(samples_ddim)
 
+
     def clean(s):
         return s.replace(" ", "_").replace("/", "_").replace("-", "_").lower()
-
-    wandb_run_name = (
-        f"prompt={clean(opt.prompt)[:30]}"
-        f"|ref={os.path.splitext(os.path.basename(opt.ref_img))[0] if opt.ref_img else 'noref'}"
-        f"|{'pno' if USE_PNO else 'std'}"
-        f"|alpha={'-' if USE_PNO else opt.ref_blend_weight}"
-    )
-
-    opt.loss = "cosine" if "cosine" in opt.aligner_model_path else "infonce"
-    opt.exclude_cls = True
+    wandb_run_name_parts = [f"prompt={clean(opt.prompt)[:30]}" if not opt.from_file else "from_file"]
+    if opt.ref_img: 
+        wandb_run_name_parts.append(f"ref={clean(os.path.splitext(os.path.basename(opt.ref_img))[0])}")
+    else: 
+        wandb_run_name_parts.append("noref")
+    if opt.use_pno_trajectory:
+        wandb_run_name_parts.append("PNO") 
+    if opt.ref_img: 
+        wandb_run_name_parts.append(f"alpha={opt.ref_blend_weight}")
     opt.create_date = datetime.now().strftime("%d-%m-%Y_%H-%M-%S")
 
-    wandb.init(
-        project=opt.wandb_project, 
-        entity=opt.wandb_entity,
-        name=wandb_run_name,
-        config=vars(opt), # add all the configs in the wandb run
-    )
+    wandb.init(project=opt.wandb_project, entity=opt.wandb_entity, name="|".join(wandb_run_name_parts), config=vars(opt))
 
-    precision_scope = autocast if opt.precision=="autocast" or opt.bf16 else nullcontext
-    with torch.no_grad(), \
-        precision_scope(opt.device), \
-        model.ema_scope():
-            all_samples = list()
-            def wandb_img_callback(pred_x0, i):
+    outer_grad_context = nullcontext() if opt.use_pno_trajectory else torch.no_grad()
+    precision_scope_device = opt.device if opt.device == "cuda" else "cpu"
+    current_precision_scope = autocast(device_type=precision_scope_device, enabled=(opt.precision == "autocast" or opt.bf16))
+    def wandb_img_callback(pred_x0, i):
                 total_steps = opt.steps
                 log_steps = [s if s >= 0 else total_steps-1 for s in opt.log_steps]
                 
@@ -461,10 +441,9 @@ def main(opt):
                 # Convert to image format wandb can handle
                 images = []
                 for sample_idx, x_sample in enumerate(pred_x0):
-                    with torch.no_grad():
-                        x_sample = model.decode_first_stage(x_sample.unsqueeze(0))[0]
-                        x_sample = torch.clamp((x_sample + 1.0) / 2.0, min=0.0, max=1.0)
-                        x_sample = 255. * rearrange(x_sample.cpu().numpy(), 'c h w -> h w c')
+                    x_sample = model.decode_first_stage(x_sample.unsqueeze(0))[0]
+                    x_sample = torch.clamp((x_sample + 1.0) / 2.0, min=0.0, max=1.0)
+                    x_sample = 255. * rearrange(x_sample.cpu().numpy(), 'c h w -> h w c')
                     images.append(wandb.Image(x_sample.astype(np.uint8), 
                                               caption=f"Iter {iteration}, Prompt {prompt_idx}, Sample {sample_idx}, Step {i}/{total_steps}"))
                 
@@ -475,129 +454,138 @@ def main(opt):
                     'iteration': iteration,
                     'prompt_idx': prompt_idx
                 }
+    
+    # Initialize the static variables
+    wandb_img_callback.current_iteration = 0
+    wandb_img_callback.current_prompt_idx = 0
+    wandb_img_callback.stored_images = {}
+            
+    with outer_grad_context, current_precision_scope, model.ema_scope():
+        all_samples = list()
 
-            # Initialize the static variables
-            wandb_img_callback.current_iteration = 0
-            wandb_img_callback.current_prompt_idx = 0
-            wandb_img_callback.stored_images = {}
+        for n in trange(opt.n_iter, desc="Sampling"):
+            wandb_img_callback.current_iteration = n
+            
+            # Loop through batches of prompts from `data`
+            for prompt_idx, prompts in enumerate(tqdm(data, desc="data")):
+                wandb_img_callback.current_prompt_idx = prompt_idx
 
-            for n in trange(opt.n_iter, desc="Sampling"):
-                wandb_img_callback.current_iteration = n
-                for prompt_idx, prompts in enumerate(tqdm(data, desc="data")):
-                    wandb_img_callback.current_prompt_idx = prompt_idx
+                current_batch_size = len(prompts) # Actual number of prompts in this batch
+                shape = [opt.C, opt.H // opt.f, opt.W // opt.f] 
+                
+                x_samples = None # Will hold [0,1] image tensors for this batch
+
+                if opt.use_pno_trajectory:
+                    print(f"\nInitiating PNO Trajectory for {current_batch_size} prompt(s) from batch {prompt_idx} individually...")
+                    pno_batch_outputs_list = [] 
+                    # In PNO mode, we run optimization for each prompt in the current "batch" from `data`
+                    # This is equivalent to `opt.n_samples` independent PNO runs if `data` had one batch of replicated prompts.
+                    for p_idx_in_current_batch, single_prompt_text in enumerate(prompts):
+                        print(f"  PNO Run {p_idx_in_current_batch+1}/{current_batch_size} for prompt: '{single_prompt_text}'")
+                        
+                        pno_img_tensor = optimize_prompt_noise_trajectory(
+                            model_ldm=model, sampler_ldm=sampler, 
+                            clip_image_encoder_for_loss=clip_image_encoder_pno, 
+                            clip_preprocess_for_loss=clip_preprocess_pno,
+                            text_prompt=single_prompt_text,
+                            ref_image=ref_image,
+                            opt_cmd=opt, device=device
+                        )
+                        if pno_img_tensor is not None:
+                            pno_batch_outputs_list.append(pno_img_tensor) # These are [-1,1]
+                    
+                    if pno_batch_outputs_list:
+                        x_samples_from_pno_raw = torch.cat(pno_batch_outputs_list, dim=0) 
+                        x_samples = torch.clamp((x_samples_from_pno_raw + 1.0) / 2.0, min=0.0, max=1.0)
+                    else:
+                        print(f"Warning: PNO trajectory yielded no results for prompt batch {prompt_idx}.")
+                        continue 
+
+                else: # Standard Pipeline (Logic from OLD script)
+                    print(f"\nRunning Standard Pipeline for batch {prompt_idx+1} (Size: {current_batch_size})")
                     uc = None
                     if opt.scale != 1.0:
-                        uc = model.get_learned_conditioning(batch_size * [""])
-                    if isinstance(prompts, tuple):
-                        prompts = list(prompts)
-                    shape = [opt.C, opt.H // opt.f, opt.W // opt.f]
-
-                    if USE_PNO:
-                        # PNO Optimization Path
-                        all_pno_samples = []
-                        for idx in range(batch_size): # opt.n_samples
-                            samples = optimize_pno(
-                                model=model,
-                                sampler=sampler,
-                                clip_model_img=openclip_image_encoder,
-                                text_prompt=prompts[0], # NOTE: we use only 1 prompt at a time
-                                image_feat=image_feat,
-                                steps=opt.pno_steps,
-                                ddim_steps=opt.steps,
-                                lr_prompt=opt.lr_prompt,
-                                lr_noise=opt.lr_noise,
-                                unconditional_guidance_scale=opt.scale,
-                                unconditional_conditioning=uc[idx:idx+1] if uc is not None else None,
-                                device=device,
-                                opt=opt,
-                            )
-                            all_pno_samples.append(samples)
-                            
-
-                        # Stack samples if there are multiple
-                        if len(all_pno_samples) > 1:
-                            samples = torch.cat(all_pno_samples, dim=0)
-                        else:
-                            samples = all_pno_samples[0]
-                        
-                        # Decode latents to images
-                        x_samples = samples # model.decode_first_stage(samples)
-                        print(f"x_samples shape: {x_samples.shape}")
-                    else:
-                        # Standard Sampling Path
+                        uc = model.get_learned_conditioning(current_batch_size * [""])
+                    
+                    if opt.ref_img:        
                         c = model.get_learned_conditioning(prompts, ref_image=ref_image)
-                        samples, _ = sampler.sample(
-                            S=opt.steps,
-                            conditioning=c,
-                            batch_size=opt.n_samples,
-                            shape=shape,
-                            verbose=False,
-                            unconditional_guidance_scale=opt.scale,
-                            unconditional_conditioning=uc,
-                            eta=opt.ddim_eta,
-                            x_T=start_code
-                        )
+                    else:
+                        c = model.get_learned_conditioning(prompts)
+                    
+                    current_batch_start_code = None
+                    if opt.fixed_code:
+                        if 'fixed_start_code_base' not in locals() or fixed_start_code_base is None:
+                             fixed_start_code_base = torch.randn([opt.n_samples, opt.C, opt.H // opt.f, opt.W // opt.f], device=device)
+                        current_batch_start_code = fixed_start_code_base[:current_batch_size]
 
-                        # Decode latents to images
-                        x_samples = model.decode_first_stage(samples)
-                        x_samples = torch.clamp((x_samples + 1.0) / 2.0, min=0.0, max=1.0)
 
-                    # Save individual samples
-                    for x_sample in x_samples:
-                        x_sample = 255. * rearrange(x_sample.cpu().numpy(), 'c h w -> h w c')
-                        img = Image.fromarray(x_sample.astype(np.uint8))
-                        img = put_watermark(img, wm_encoder)
-                        img.save(os.path.join(sample_path, f"{base_count:05}.png"))
+                    samples_latent, _ = sampler.sample( 
+                        S=opt.steps,
+                        conditioning=c,
+                        batch_size=current_batch_size,
+                        shape=shape,
+                        verbose=False,
+                        unconditional_guidance_scale=opt.scale,
+                        unconditional_conditioning=uc,
+                        eta=opt.ddim_eta,
+                        x_T=current_batch_start_code,
+                        img_callback=wandb_img_callback 
+                    )
+                    x_samples = model.decode_first_stage(samples_latent) 
+                    x_samples = torch.clamp((x_samples + 1.0) / 2.0, min=0.0, max=1.0) 
+
+                # Common processing after batch generation (PNO or Standard)
+                if x_samples is not None:
+                    all_samples.append(x_samples.cpu()) # `all_samples` from OLD
+
+                    # Saving individual samples
+                    for x_sample_tensor_normalized in x_samples: 
+                        img_np_to_save = 255. * rearrange(x_sample_tensor_normalized.cpu().numpy(), 'c h w -> h w c')
+                        img_pil_to_save = Image.fromarray(img_np_to_save.astype(np.uint8))
+                        img_pil_to_save = put_watermark(img_pil_to_save, wm_encoder)
+                        img_pil_to_save.save(os.path.join(sample_path, f"{base_count:05}.png")) # Use `base_count` from OLD
                         base_count += 1
-                        sample_count += 1
+        
+        # Log collected intermediate DDIM images from standard pipeline
+        if wandb_img_callback.stored_images:
+            step_to_batch_images_map = {} # Renamed from step_to_batch
+            for unique_call_key, call_data_dict in wandb_img_callback.stored_images.items():
+                actual_ddim_step = call_data_dict['step']
+                images_from_call = call_data_dict['images']
+                if actual_ddim_step not in step_to_batch_images_map:
+                    step_to_batch_images_map[actual_ddim_step] = []
+                step_to_batch_images_map[actual_ddim_step].extend(images_from_call)
 
-                    all_samples.append(x_samples)
+            sorted_ddim_steps_logged = sorted(step_to_batch_images_map.keys())
+            for wandb_log_idx, ddim_s_val in enumerate(sorted_ddim_steps_logged):
+                all_imgs_for_this_ddim_s = step_to_batch_images_map[ddim_s_val]
+                if all_imgs_for_this_ddim_s:
+                    wandb.log({"Standard DDIM Intermediate Samples": all_imgs_for_this_ddim_s}, step=wandb_log_idx) 
+            wandb_img_callback.stored_images = {} 
 
-            # additionally, save as grid
-            grid = torch.stack(all_samples, 0)
-            grid = rearrange(grid, 'n b c h w -> (n b) c h w')
-            grid = make_grid(grid, nrow=n_rows)
-
-            # to image
-            grid = 255. * rearrange(grid, 'c h w -> h w c').cpu().numpy()
-            grid = Image.fromarray(grid.astype(np.uint8))
-            grid = put_watermark(grid, wm_encoder)
-            grid.save(os.path.join(outpath, f'grid-{grid_count:04}.png'))
-            grid_count += 1
+        if all_samples:
+            grid_tensor_all = torch.cat(all_samples, dim=0)
+            grid_display_rows = n_rows
+            if grid_tensor_all.shape[0] == 0: print("Warning: No samples for grid.")
+            elif grid_tensor_all.shape[0] < grid_display_rows : grid_display_rows = grid_tensor_all.shape[0]
+            
+            if grid_tensor_all.shape[0] > 0:
+                grid = make_grid(grid_tensor_all, nrow=grid_display_rows if grid_display_rows > 0 else 1)
+                grid_numpy = 255. * rearrange(grid, 'c h w -> h w c').numpy()
+                grid_pil = Image.fromarray(grid_numpy.astype(np.uint8))
+                grid_pil = put_watermark(grid_pil, wm_encoder)
+                grid_pil.save(os.path.join(outpath, f'grid-{grid_count:04}.png'))
+                grid_count += 1
     
-    # After sampling completes
-    if hasattr(wandb_img_callback, 'stored_images'):
-        # Group by diffusion steps to maintain slider functionality
-        step_to_batch = {}
-        
-        # Organize batches by step
-        for batch_key, batch_data in wandb_img_callback.stored_images.items():
-            step = batch_data['step']
-            if step not in step_to_batch:
-                step_to_batch[step] = []
-            step_to_batch[step].append(batch_data)
-        
-        # Log each step with all its images from different iterations/prompts
-        for step_idx, step in enumerate(sorted(step_to_batch.keys())):
-            all_batches = step_to_batch[step]
-            all_images = []
-            
-            for batch_data in all_batches:
-                all_images.extend(batch_data['images'])
-            
-            wandb.log({
-                "intermediate_samples": all_images,
-            }, step=step_idx)
-        
-        # Clear stored images
-        wandb_img_callback.stored_images = {}
-
     wandb.finish()
-
-    print(f"Your samples are ready and waiting for you here: \n{outpath} \n"
-          f" \nEnjoy.")
-
+    print(f"Your samples are ready and waiting for you here: \n{outpath} \nEnjoy.")
 
 if __name__ == "__main__":
-    opt = parse_args()
-    main(opt)
+    cmd_opt = parse_args()
+    if cmd_opt.use_pno_trajectory and cmd_opt.ddim_eta == 0.0:
+        print("Warning: PNO trajectory for intermediate noises is most effective when --ddim_eta > 0.")
+    if not cmd_opt.ckpt: raise ValueError("Please specify checkpoint path with --ckpt")
+    if not os.path.exists(cmd_opt.ckpt): raise FileNotFoundError(f"Checkpoint not found: {cmd_opt.ckpt}")
+    if not os.path.exists(cmd_opt.config): raise FileNotFoundError(f"Config not found: {cmd_opt.config}")
+
+    main(cmd_opt)
