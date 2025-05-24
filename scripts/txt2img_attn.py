@@ -21,9 +21,7 @@ from ldm.models.diffusion.plms import PLMSSampler
 from ldm.models.diffusion.dpm_solver import DPMSolverSampler
 from torchvision import transforms
 
-from sklearn.manifold import TSNE
 import matplotlib.pyplot as plt
-from skimage.measure import block_reduce
 
 
 from PIL import Image
@@ -389,8 +387,7 @@ def main(opt):
     device = torch.device("cuda") if opt.device == "cuda" else torch.device("cpu")
     model = load_model_from_config(config, f"{opt.ckpt}", device)
     
-    attn = AttnStore()
-    attn.install(model.model.diffusion_model)
+    attn = AttnStore(model.model.diffusion_model)
 
     
     # Set the blend weight for the reference image
