@@ -282,9 +282,9 @@ def main(opt):
         model.fusion_token_type = opt.fusion_token_type
         model.use_cross_attention_fusion = opt.use_cross_attention_fusion
         
-        # Create cross-attention fusion module if needed
+        # Create cross-attention fusion module if needed, using ref_blend_weight as alpha
         if opt.use_cross_attention_fusion:
-            model.cross_attention_fusion = CrossAttentionFusion(dim=1024).to(model.device)
+            model.cross_attention_fusion = CrossAttentionFusion(dim=1024, alpha=opt.ref_blend_weight).to(model.device)
 
     if opt.plms:
         sampler = PLMSSampler(model, device=device)

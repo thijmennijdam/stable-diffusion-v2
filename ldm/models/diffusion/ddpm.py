@@ -594,10 +594,6 @@ class LatentDiffusion(DDPM):
         self.use_cross_attention_fusion = use_cross_attention_fusion
         self.fusion_token_type = fusion_token_type
 
-        if self.use_ref_img:
-            self.create_ref_img_encoder()
-            if self.use_cross_attention_fusion:
-                self.cross_attention_fusion = CrossAttentionFusion(dim=1024)
 
     def create_ref_img_encoder(self):
         print("Using CLIP model for reference image encoding.")
@@ -1974,24 +1970,32 @@ class ImageEmbeddingConditionedLatentDiffusion(LatentDiffusion):
         return log
 
 class CrossAttentionFusion(nn.Module):
-    def __init__(self, dim=1024):
+    def __init__(self, dim=1024, alpha=0.1):
         super().__init__()
         self.scale = math.sqrt(dim)
+        self.alpha = nn.Parameter(torch.tensor(alpha))
 
     def forward(self, text_tokens, image_tokens):
-        # text_tokens: [B, 77, D] (queries)
-        # image_tokens: [B, N_img, D] (keys and values)
+        # text_tokens: [B, 77, D] - already normalized from CLIP
+        # image_tokens: [B, N_img, D] - already normalized and aligned
 
-        # Normalize for stability
-        text_tokens = F.normalize(text_tokens, dim=-1)
-        image_tokens = F.normalize(image_tokens, dim=-1)
+        # # Normalize for stability
+        # text_tokens = F.normalize(text_tokens, dim=-1)
+        # image_tokens = F.normalize(image_tokens, dim=-1)
 
-        # Compute dot-product attention
+        print(f"Alpha: {self.alpha.item():.4f}")
+        print(f"Text norm: {torch.norm(text_tokens, dim=-1).mean():.4f}")
+        print(f"Image norm: {torch.norm(image_tokens, dim=-1).mean():.4f}")
+        
+        # Direct attention without additional normalization
         attn_scores = torch.matmul(text_tokens, image_tokens.transpose(-2, -1))  # [B, 77, N_img]
         attn_scores = attn_scores / self.scale
         attn_weights = F.softmax(attn_scores, dim=-1)  # [B, 77, N_img]
 
-        # Attend image context
-        fused_tokens = torch.matmul(attn_weights, image_tokens)  # [B, 77, D]
+        # Attend to image features
+        attended_image = torch.matmul(attn_weights, image_tokens)  # [B, 77, D]
 
-        return fused_tokens
+        # Fusion
+        fused = (1 - self.alpha) * text_tokens + self.alpha * attended_image
+
+        return fused
