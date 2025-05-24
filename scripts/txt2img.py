@@ -27,11 +27,11 @@ from scripts.vcf.pno import instantiate_clip_model_for_pno_trajectory_loss, opti
 load_dotenv()
 # REMOVED: torch.set_grad_enabled(False)
 
-def chunk(it, size): # From OLD
+def chunk(it, size):
     it = iter(it)
     return iter(lambda: tuple(islice(it, size)), ())
 
-def load_model_from_config(config, ckpt, device=torch.device("cuda"), verbose=False): # From OLD
+def load_model_from_config(config, ckpt, device=torch.device("cuda"), verbose=False):
     print(f"Loading model from {ckpt}")
     pl_sd = torch.load(ckpt, map_location="cpu")
     if "global_step" in pl_sd:
@@ -58,7 +58,6 @@ def load_model_from_config(config, ckpt, device=torch.device("cuda"), verbose=Fa
 
 def parse_args():
     parser = argparse.ArgumentParser()
-    # --- Arguments from OLD script (for consistency) ---
     parser.add_argument(
         "--prompt",
         type=str,
@@ -221,7 +220,7 @@ def parse_args():
     parser.add_argument(
         "--ref_blend_weight",
         type=float,
-        default=0.05,
+        default=0.1,
         help="Blend weight for reference image. 1.0 corresponds to full destruction of information in init image. Used to balance the influence of the reference image and the prompt.",
     )
     parser.add_argument(
@@ -387,7 +386,7 @@ def main(opt):
 
         with torch.no_grad(), additional_context:
             for _ in range(3):
-                c = model.get_learned_conditioning(prompts, ref_image=ref_image)
+                c = model.get_learned_conditioning(prompts)
             samples_ddim, _ = sampler.sample(S=5,
                                              conditioning=c,
                                              batch_size=batch_size,
@@ -406,9 +405,9 @@ def main(opt):
         return s.replace(" ", "_").replace("/", "_").replace("-", "_").lower()
     wandb_run_name_parts = [f"prompt={clean(opt.prompt)[:30]}" if not opt.from_file else "from_file"]
     if opt.ref_img: 
-        wandb_run_name_parts.append(f"ref={clean(os.path.splitext(os.path.basename(opt.ref_img))[0])}")
+        wandb_run_name_parts.append(f"ref_img={clean(os.path.splitext(os.path.basename(opt.ref_img))[0])}")
     else: 
-        wandb_run_name_parts.append("noref")
+        wandb_run_name_parts.append("no_ref_img")
     if opt.use_pno_trajectory:
         wandb_run_name_parts.append("PNO") 
     if opt.ref_img: 
@@ -501,7 +500,7 @@ def main(opt):
                         print(f"Warning: PNO trajectory yielded no results for prompt batch {prompt_idx}.")
                         continue 
 
-                else: # Standard Pipeline (Logic from OLD script)
+                else: # Standard Pipeline
                     print(f"\nRunning Standard Pipeline for batch {prompt_idx+1} (Size: {current_batch_size})")
                     uc = None
                     if opt.scale != 1.0:
@@ -536,14 +535,14 @@ def main(opt):
 
                 # Common processing after batch generation (PNO or Standard)
                 if x_samples is not None:
-                    all_samples.append(x_samples.cpu()) # `all_samples` from OLD
+                    all_samples.append(x_samples.cpu())
 
                     # Saving individual samples
                     for x_sample_tensor_normalized in x_samples: 
                         img_np_to_save = 255. * rearrange(x_sample_tensor_normalized.cpu().numpy(), 'c h w -> h w c')
                         img_pil_to_save = Image.fromarray(img_np_to_save.astype(np.uint8))
                         img_pil_to_save = put_watermark(img_pil_to_save, wm_encoder)
-                        img_pil_to_save.save(os.path.join(sample_path, f"{base_count:05}.png")) # Use `base_count` from OLD
+                        img_pil_to_save.save(os.path.join(sample_path, f"{base_count:05}.png"))
                         base_count += 1
         
         # Log collected intermediate DDIM images from standard pipeline
