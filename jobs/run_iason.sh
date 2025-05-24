@@ -5,7 +5,7 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ROOT_DIR="${SCRIPT_DIR}/.."
 
 # List of alpha values
-ALPHAS=(1)
+ALPHAS=(0.1 0.15 0.3 0.5)
 
 # List of aligner models
 ALIGNER_MODELS=(
@@ -14,10 +14,12 @@ ALIGNER_MODELS=(
 )
 
 # List of fusion token types
-FUSION_TOKEN_TYPES=("cls_only" "except_cls" "all")
+# FUSION_TOKEN_TYPES=("cls_only" "except_cls" "all")
+FUSION_TOKEN_TYPES=("all")
 
 # List of fusion methods
-FUSION_METHODS=("concat" "cross_attention")
+# FUSION_METHODS=("concat" "cross_attention")
+FUSION_METHODS=("cross_attention")
 
 # Inference arguments
 PROMPT="a photo of a cat"

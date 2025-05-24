@@ -19,12 +19,15 @@ source activate ldmv2
 
 # Run inference
 python scripts/txt2img.py \
-  --prompt "a professional photograph of an astronaut riding a horse" \
-  --ckpt /scratch-shared/holy-triangle/weights/stable-diffusion-2-1/v2-1_768-ema-pruned.ckpt \
+  --prompt "a photo of a cat" \
+  --ckpt "checkpoints/model_checkpoint.ckpt" \
   --config configs/stable-diffusion/v2-inference-v.yaml \
   --H 768 --W 768 \
-  --ref_img "data/picasso_style.jpg" \
-  --aligner_model_path "/scratch-shared/holy-triangle/weights/img2text_aligner_fixed/flickr30k_cosine/model_best.pth" \
-  --ref_blend_weight 1.0
+  --ref_img "data/cat.jpg" \
+  --aligner_model_path "/scratch-shared/holy-triangle/weights/img2text_aligner_fixed/flickr30k_infonce/model_best.pth" \
+  --ref_blend_weight 1.0 \
+  --fusion_token_type "all" \
+  --use_cross_attention_fusion \
+  --use_ref_img
 
 echo "✅ Inference job completed at: $(date)"
