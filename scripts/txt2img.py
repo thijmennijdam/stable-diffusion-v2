@@ -268,6 +268,7 @@ def main(opt):
     
     # Set the blend weight for the reference image
     if opt.ref_img:
+        model.force_refresh_reference_image()  # Clear any cached images
         model.set_blend_weight(opt.ref_blend_weight)
         model.set_use_ref_img(True)
         model.create_ref_img_encoder()
