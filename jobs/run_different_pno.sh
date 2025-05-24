@@ -6,12 +6,10 @@ ROOT_DIR="/home/azywot/FOMO/stable-diffusion-v2"
 MAX_JOBS=3
 SLEEP_TIME=60
 
-# Function to sanitize strings for filenames and job names
 sanitize() {
   echo "$1" | tr '/: ' '__'
 }
 
-# Function to wait until job slots are available
 wait_for_available_slot() {
   while true; do
     CURRENT_JOBS=$(squeue -u "$USER" -h | wc -l)
@@ -30,30 +28,27 @@ ALIGNER_MODELS=(
   "/scratch-shared/holy-triangle/weights/img2text_aligner_fixed/flickr30k_infonce/model_best.pth"
 )
 
-# Inference arguments
 PROMPT="a photo of a cat"
 REF_IMG="${ROOT_DIR}/data/van_gogh_starry_night.jpg"
 CONFIG="${ROOT_DIR}/configs/stable-diffusion/v2-inference-v.yaml"
 CKPT="/scratch-shared/holy-triangle/weights/stable-diffusion-2-1/v2-1_768-ema-pruned.ckpt"
 
-# Job script path
 JOB_SCRIPT="${ROOT_DIR}/jobs/run_single_alpha.sh"
 
-# Submit jobs
 for ALIGNER_MODEL in "${ALIGNER_MODELS[@]}"; do
   SAFE_MODEL_NAME=$(sanitize "$ALIGNER_MODEL")
   SAFE_PROMPT=$(sanitize "$PROMPT")
 
   for ALPHA in "${ALPHAS[@]}"; do
     wait_for_available_slot
-    sleep 2 
+    sleep 2
 
     TIMESTAMP=$(date +"%Y-%m-%d %H:%M:%S")
-    echo "[$TIMESTAMP] 📤 Submitting job: alpha=$ALPHA, prompt=\"$PROMPT\""
+    echo "[$TIMESTAMP] 📤 Submitting PNO job: alpha=$ALPHA"
 
     sbatch \
-      --job-name="gen_a${ALPHA}" \
-      --output="${ROOT_DIR}/outputs/jobs/gen_a${ALPHA}_p${SAFE_PROMPT}_%A.out" \
+      --job-name="pno_a${ALPHA}" \
+      --output="${ROOT_DIR}/outputs/jobs/pno_a${ALPHA}_p${SAFE_PROMPT}_%A.out" \
       --partition=gpu_h100 \
       --gpus=1 \
       --cpus-per-task=16 \
