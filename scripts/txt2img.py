@@ -334,7 +334,7 @@ def main(opt):
             ref_image = Image.open(opt.ref_img).convert("RGB")
             ref_image = transforms.ToTensor()(ref_image).to(device).unsqueeze(0) 
             # scale to -1 to 1
-            ref_image = (ref_image - 0.5) * 2           
+            # ref_image = (ref_image - 0.5) * 2           
         else:
             print(f"Warning: Reference image not found at {opt.ref_img}. Skipping.")
     else:
