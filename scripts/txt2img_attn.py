@@ -31,7 +31,7 @@ import re
 
 
 # -- Update for visualization of attention maps --
-from ldm.modules.attention import BasicTransformerBlock
+from ldm.modules.attention import BasicTransformerBlock, CrossAttention
 
 
 """
@@ -44,7 +44,6 @@ uv run python scripts/txt2img_attn.py \
   --ref_blend_weight 0.2 \
   --aligner_model_path "/scratch-shared/holy-triangle/weights/img2text_aligner_fixed/flickr30k_cosine/model_best.pth"
 """
-
 # ---------- hooks ----------
 class AttnStore:
     def __init__(self, unet, layer_idxs=None):
@@ -61,6 +60,11 @@ class AttnStore:
         
         print(f"\nFound {len(attn_modules)} attention modules")
         
+        for name, module in unet.named_modules():
+            if isinstance(module, CrossAttention):
+                print(name, module.heads)
+
+
         # Use simple indexing for now
         if layer_idxs is None:
             if len(attn_modules) >= 3:
@@ -103,7 +107,7 @@ class AttnStore:
         if "transformer_blocks" in parts:
             j = parts.index("transformer_blocks")
             if j+1 < len(parts) and parts[j+1].isdigit():
-                tr_name = f"– T{parts[j+1]}"
+                tr_name = f"- T{parts[j+1]}"
 
         if block_name:
             return f"{block_name} {tr_name}".strip()
@@ -138,7 +142,7 @@ class AttnStore:
 
 
 # Simple version of build_heatmaps that works with the debug store
-def build_heatmaps(store, H, W):
+def build_heatmaps(store, H, W, batch_size=3, sample_idx=0):
     """
     Builds attention heatmaps for selected layers.
     Uses the last set of attention maps (final diffusion step).
@@ -155,10 +159,15 @@ def build_heatmaps(store, H, W):
 
     for i, entry in enumerate(last_maps):
         t = entry['attention']
+        
+        print(f"Attention shape: {t.shape}, Layer: {entry['layer_name']}, Hook index: {entry['hook_idx']}")
 
-        # Handle (heads*B, Q, K) or (Q, K)
         if t.ndim == 3:
-            attn_patch = t.mean(0).mean(1)  # → (Q,)
+            num_heads = t.shape[0] // batch_size
+            t = t.view(batch_size, num_heads, -1, t.shape[-1])
+            attn_patch = t[sample_idx].mean(0).mean(1)  # → (H, W) for the sample_idx
+            print(f"Using attention patch shape: {attn_patch.shape} for sample index {sample_idx}")
+
         elif t.ndim == 2:
             attn_patch = t.mean(1)         # → (Q,)
         else:
@@ -218,7 +227,6 @@ def overlay_grid(img_pil, heatmaps, titles=None, alpha=0.6, figsize_per_plot=4):
     """
     Creates a grid visualization of heatmaps overlaid on the image.
     """
-    import matplotlib.pyplot as plt
 
     n = len(heatmaps)
     fig, axes = plt.subplots(1, n + 1, figsize=((n + 1) * figsize_per_plot, figsize_per_plot))
@@ -733,16 +741,20 @@ def main(opt):
                             if maps:
                                 print(f"Layer {key}: {len(maps)} maps, shape: {maps[0].shape}")
 
-                    for x_sample in x_samples:
+                    print(f"Number of samples: {len(x_samples)}")
+                    print(f"batch size: {batch_size}, n_rows: {n_rows}")
+                    for sample_idx, x_sample in enumerate(x_samples):
                         x_sample = 255. * rearrange(x_sample.cpu().numpy(), 'c h w -> h w c')
                         img = Image.fromarray(x_sample.astype(np.uint8))
                         img = put_watermark(img, wm_encoder)
                         img.save(os.path.join(sample_path, f"{base_count:05}.png"))
-                    
+
+            
                         
                         # Kleine blokken
 
-                        heatmaps, names = build_heatmaps(attn, opt.H, opt.W)
+                        heatmaps, names = build_heatmaps(attn, opt.H, opt.W, batch_size=opt.n_samples, 
+                                                            sample_idx=sample_idx)
 
 
                         
