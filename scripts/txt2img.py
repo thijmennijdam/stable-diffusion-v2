@@ -504,9 +504,6 @@ def main(opt):
         f"|aligner_v={opt.aligner_version}"
         f"|dataset={opt.aligner_dataset}"
         f"|loss={opt.aligner_loss}"
-        f"|bs={opt.aligner_batch_size}"
-        f"|dropout={opt.aligner_dropout}"
-        f"|exclude_cls={opt.aligner_exclude_cls}"
     )
 
     opt.create_date = datetime.now().strftime("%d-%m-%Y_%H-%M-%S")
