@@ -29,10 +29,28 @@ CMD="uv run python scripts/txt2img.py \
   --H 768 --W 768 \
   --ref_img \"$REF_IMG\" \
   --ref_blend_weight \"$ALPHA\" \
-  --aligner_model_path \"$ALIGNER_MODEL\" \
+  --aligner_version \"$ALIGNER_VERSION\" \
+  --aligner_dataset \"$ALIGNER_DATASET\" \
+  --aligner_loss \"$ALIGNER_LOSS\" \
+  --aligner_batch_size \"$ALIGNER_BATCH_SIZE\" \
+  --aligner_dropout \"$ALIGNER_DROPOUT\" \
+  --aligner_exclude_cls \"$ALIGNER_CLS\" \
   --fusion_token_type \"$FUSION_TOKEN_TYPE\" \
   --fusion_type \"$FUSION_TYPE\""
 
+# python scripts/txt2img.py \
+#   --prompt "a photo of a cat" \
+#   --ckpt "model_checkpoint.ckpt" \
+#   --config "configs/stable-diffusion/v2-inference-v.yaml" \
+#   --H 768 --W 768 \
+#   --ref_img "data/cat.jpg" \
+#   --ref_blend_weight "0.5" \
+#   --aligner_version "v1" \
+#   --aligner_dataset "coco" \
+#   --aligner_loss "infonce" \
+#   --aligner_batch_size "64" \
+#   --aligner_dropout "0.1" \
+#   --aligner_exclude_cls "true"
 
 echo "Running: $CMD"
 eval $CMD
