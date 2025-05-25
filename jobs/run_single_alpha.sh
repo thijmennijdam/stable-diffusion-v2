@@ -30,12 +30,9 @@ CMD="uv run python scripts/txt2img.py \
   --ref_img \"$REF_IMG\" \
   --ref_blend_weight \"$ALPHA\" \
   --aligner_model_path \"$ALIGNER_MODEL\" \
-  --fusion_token_type \"$FUSION_TOKEN_TYPE\""
+  --fusion_token_type \"$FUSION_TOKEN_TYPE\" \
+  --fusion_type \"$FUSION_TYPE\""
 
-# Add cross-attention fusion flag if FUSION_METHOD is "cross_attention"
-if [ "$FUSION_METHOD" = "cross_attention" ]; then
-  CMD="$CMD --use_cross_attention_fusion"
-fi
 
 echo "Running: $CMD"
 eval $CMD
