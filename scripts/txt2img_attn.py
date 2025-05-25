@@ -40,9 +40,9 @@ uv run python scripts/txt2img_attn.py \
   --ckpt "/scratch-shared/holy-triangle/weights/stable-diffusion-2-1/v2-1_768-ema-pruned.ckpt" \
   --config "configs/stable-diffusion/v2-inference-v.yaml" \
   --H 768 --W 768 \
-  --ref_img "data/cat.jpg" \
-  --ref_blend_weight 0.2 \
-  --aligner_model_path "/scratch-shared/holy-triangle/weights/img2text_aligner_fixed/flickr30k_cosine/model_best.pth"
+  --ref_img "data/van_gogh_starry_night.jpg" \
+  --ref_blend_weight 0.75 \
+  --aligner_model_path "/scratch-shared/holy-triangle/weights/img2text_aligner_fixed/flickr30k_infonce/model_best.pth"
 """
 # ---------- hooks ----------
 class AttnStore:
