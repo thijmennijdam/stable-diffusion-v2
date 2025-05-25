@@ -4,7 +4,6 @@
 #SBATCH --cpus-per-task=16
 #SBATCH --output=outputs/jobs/run_alpha_${ALPHA}_pno_${USE_PNO}_fusion_${FUSION_TYPE}_%A.out
 #SBATCH --time=00:10:00
-#SBATCH --mem=40G
 
 echo "✅ Job started at: $(date)"
 echo "Alpha: ${ALPHA}"
@@ -15,24 +14,26 @@ echo "Using PNO: ${USE_PNO}"
 cd "$ROOT_DIR" || exit 1
 
 # Module loading
-module load 2023
-module load Anaconda3/2023.07-2
-module load CUDA/12.1.1
+module load 2022
+module load CUDA/11.7.0
 
-# Activate conda env
-source activate ldmv2
+source .venv/bin/activate
+
+uv pip install -e .
 
 # Determine which command to run
 if [ "$USE_PNO" = "true" ]; then
   echo "🔁 Running with PNO inference"
-  CMD="uv run python scripts/txt2img.py \
+  CMD="python scripts/txt2img.py \
     --prompt \"$PROMPT\" \
     --ckpt \"$CKPT\" \
     --config \"$CONFIG\" \
     --H 512 --W 512 \
     --ref_img \"$REF_IMG\" \
     --ref_blend_weight \"$ALPHA\" \
-    --aligner_model_path \"$ALIGNER_MODEL\" \
+    --aligner_version \"$ALIGNER_VERSION\" \
+    --aligner_dataset \"$ALIGNER_DATASET\" \
+    --aligner_loss \"$ALIGNER_LOSS\" \
     --fusion_token_type \"$FUSION_TOKEN_TYPE\" \
     --fusion_type \"$FUSION_TYPE\" \
     --n_samples 1 \
@@ -45,14 +46,16 @@ if [ "$USE_PNO" = "true" ]; then
     --pno_clip_grad_norm 1.0"
 else
   echo "📸 Running standard fusion inference"
-  CMD="uv run python scripts/txt2img.py \
+  CMD="python scripts/txt2img.py \
     --prompt \"$PROMPT\" \
     --ckpt \"$CKPT\" \
     --config \"$CONFIG\" \
     --H 768 --W 768 \
     --ref_img \"$REF_IMG\" \
     --ref_blend_weight \"$ALPHA\" \
-    --aligner_model_path \"$ALIGNER_MODEL\" \
+    --aligner_version \"$ALIGNER_VERSION\" \
+    --aligner_dataset \"$ALIGNER_DATASET\" \
+    --aligner_loss \"$ALIGNER_LOSS\" \
     --fusion_token_type \"$FUSION_TOKEN_TYPE\" \
     --fusion_type \"$FUSION_TYPE\""
 fi
