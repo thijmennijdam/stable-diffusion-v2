@@ -22,10 +22,21 @@ from ldm.models.diffusion.plms import PLMSSampler
 from ldm.models.diffusion.dpm_solver import DPMSolverSampler
 from torchvision import transforms
 from ldm.models.diffusion.ddpm import CrossAttentionFusion
+import sys
 
 load_dotenv()
 
 torch.set_grad_enabled(False)
+
+def str2bool(v):
+    if isinstance(v, bool):
+        return v
+    if v.lower() in ('yes', 'true', 't', 'y', '1'):
+        return True
+    elif v.lower() in ('no', 'false', 'f', 'n', '0'):
+        return False
+    else:
+        raise argparse.ArgumentTypeError('Boolean value expected.')
 
 def chunk(it, size):
     it = iter(it)
@@ -226,12 +237,6 @@ def parse_args():
         help="Blend weight for reference image. 1.0 corresponds to full destruction of information in init image. Used to balance the influence of the reference image and the prompt.",
     )
     parser.add_argument(
-        "--aligner_model_path",
-        type=str,
-        default="weights/img2text_aligner/coco_cosine/model_best.pth",
-        help="Path to the aligner model. If not specified, the default model will be used.",
-    )
-    parser.add_argument(
         "--ref_first",
         action='store_true',
         help="If set, reference image features will be concatenated before text features",
@@ -249,6 +254,47 @@ def parse_args():
         default="alpha_blend",
         choices=["alpha_blend", "cross_attention", "concat"],
         help="Use cross-attention fusion instead of concatenation"
+    )
+    # Aligner arguments
+    parser.add_argument(
+        "--aligner_version",
+        type=str,
+        default="v1",
+        choices=["v1", "v2"],
+        help="Aligner model version (v1 or v2)"
+    )
+    parser.add_argument(
+        "--aligner_dataset",
+        type=str,
+        default="coco",
+        help="Dataset used for training the aligner"
+    )
+    parser.add_argument(
+        "--aligner_loss",
+        type=str,
+        default="infonce",
+        choices=["infonce", "mmd", "mse"],
+        help="Loss function used for training the aligner"
+    )
+    parser.add_argument(
+        "--aligner_batch_size",
+        type=int,
+        default=64,
+        help="Batch size used for training the aligner"
+    )
+    parser.add_argument(
+        "--aligner_dropout",
+        type=float,
+        default=0.1,
+        help="Dropout rate used for training the aligner"
+    )
+    parser.add_argument(
+        "--aligner_exclude_cls",
+        type=str2bool,
+        default=True,
+        const=True,
+        nargs='?',
+        help="Whether CLS token was excluded during aligner training"
     )
     
     opt = parser.parse_args()
@@ -271,6 +317,11 @@ def main(opt):
 
     config = OmegaConf.load(f"{opt.config}")
     
+    # Add aligner parameters to the model config if reference image is used
+    if opt.ref_img:
+        config.model.params.aligner_version = opt.aligner_version
+        config.model.params.aligner_dropout = opt.aligner_dropout
+
     device = torch.device("cuda") if opt.device == "cuda" else torch.device("cpu")
     model = load_model_from_config(config, f"{opt.ckpt}", device)
     
@@ -279,11 +330,23 @@ def main(opt):
         model.set_blend_weight(opt.ref_blend_weight)
         model.set_use_ref_img(True)
         model.create_ref_img_encoder()
-        model.create_image_to_text_aligner(opt.aligner_model_path)
+
+        # Construct aligner model path
+        aligner_model_path = (
+            f"weights/aligner_models/version_{opt.aligner_version}/"
+            f"dataset_{opt.aligner_dataset}/"
+            f"loss_{opt.aligner_loss}/"
+            f"batch_{opt.aligner_batch_size}/"
+            f"dropout_{opt.aligner_dropout}/"
+            f"exclude_cls_{opt.aligner_exclude_cls}/"
+            f"model_best.pth"
+        )
+        print(f"Loading aligner model from: {aligner_model_path}")
+        model.create_image_to_text_aligner(aligner_model_path)
         model.ref_first = opt.ref_first
         model.fusion_token_type = opt.fusion_token_type
         model.fusion_type = opt.fusion_type
-        
+
         # Create cross-attention fusion module if needed, using ref_blend_weight as alpha
         if opt.fusion_type == "cross_attention":
             model.cross_attention_fusion = CrossAttentionFusion(dim=1024, alpha=opt.ref_blend_weight).to(model.device)
@@ -423,10 +486,14 @@ def main(opt):
         f"|prompt={clean(opt.prompt)[:30]}"
         f"|ref={os.path.splitext(os.path.basename(opt.ref_img))[0] if opt.ref_img else 'noref'}"
         f"|alpha={opt.ref_blend_weight}"
+        f"|aligner_v={opt.aligner_version}"
+        f"|dataset={opt.aligner_dataset}"
+        f"|loss={opt.aligner_loss}"
+        f"|bs={opt.aligner_batch_size}"
+        f"|dropout={opt.aligner_dropout}"
+        f"|exclude_cls={opt.aligner_exclude_cls}"
     )
 
-    opt.loss = "cosine" if "cosine" in opt.aligner_model_path else "infonce"
-    opt.exclude_cls = True if opt.fusion_token_type == "except_cls" else False
     opt.create_date = datetime.now().strftime("%d-%m-%Y_%H-%M-%S")
 
     wandb.init(
