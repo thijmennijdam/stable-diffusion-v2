@@ -27,7 +27,7 @@ from ldm.models.autoencoder import IdentityFirstStage, AutoencoderKL
 from ldm.modules.diffusionmodules.util import make_beta_schedule, extract_into_tensor, noise_like
 from ldm.models.diffusion.ddim import DDIMSampler
 from ldm.modules.encoders.modules import FrozenOpenCLIPImageEmbedder
-from ldm.modules.vcf.alignerv2 import ImageToTextAligner
+from ldm.modules.vcf.aligner import ImageToTextAlignerV1, ImageToTextAlignerV2
 
 __conditioning_keys__ = {'concat': 'c_concat',
                          'crossattn': 'c_crossattn',
@@ -536,6 +536,8 @@ class LatentDiffusion(DDPM):
                  force_null_conditioning=False,
                  use_ref_img=False,
                  ref_blend_weight=0.05,  # Add control for text-image blending
+                 aligner_version="v2", # Add aligner version
+                 aligner_dropout=0.1,  # Add aligner dropout
                  *args, **kwargs):
         self.force_null_conditioning = force_null_conditioning
         self.num_timesteps_cond = default(num_timesteps_cond, 1)
@@ -589,6 +591,8 @@ class LatentDiffusion(DDPM):
         if self.use_ref_img:
             self.create_ref_img_encoder()
 
+        self.aligner_version = aligner_version
+        self.aligner_dropout = aligner_dropout
 
     def create_ref_img_encoder(self):
         print("Using CLIP model for reference image encoding.")
@@ -603,9 +607,23 @@ class LatentDiffusion(DDPM):
             model_path (str): Path to the .pth file containing the saved model weights.
         """
         print(f"Loading ImageToTextAligner from {model_path}")
-        self.image_to_text_aligner = ImageToTextAligner(output_dim=1024).to(self.device)
+        # Instantiate the correct aligner based on version
+        if self.aligner_version == "v1":
+            self.image_to_text_aligner = ImageToTextAlignerV1(input_dim=1280, output_dim=1024).to(self.device)
+        elif self.aligner_version == "v2":
+            self.image_to_text_aligner = ImageToTextAlignerV2(input_dim=1280, output_dim=1024, dropout=self.aligner_dropout).to(self.device)
+        else:
+            raise ValueError(f"Unknown aligner version: {self.aligner_version}")
+
         if os.path.isfile(model_path):
             state_dict = torch.load(model_path, map_location=self.device)
+            # Adjust keys if necessary (e.g., if trained with DataParallel/DistributedDataParallel)
+            # new_state_dict = {}
+            # for k, v in state_dict.items():
+            #     if k.startswith('module.'):
+            #         new_state_dict[k[7:]] = v # remove 'module.' prefix
+            #     else:
+            #         new_state_dict[k] = v
             self.image_to_text_aligner.load_state_dict(state_dict)
             print("ImageToTextAligner loaded successfully.")
         else:
