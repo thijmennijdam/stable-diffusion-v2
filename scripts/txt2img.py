@@ -244,8 +244,10 @@ def parse_args():
         help="Which image tokens to use for fusion: 'cls_only' (just CLS token), 'except_cls' (all except CLS), 'all' (all tokens)"
     )
     parser.add_argument(
-        "--use_cross_attention_fusion",
-        action='store_true',
+        "--fusion_type",
+        type=str,
+        default="alpha_blend",
+        choices=["alpha_blend", "cross_attention", "concat"],
         help="Use cross-attention fusion instead of concatenation"
     )
     
@@ -280,10 +282,10 @@ def main(opt):
         model.create_image_to_text_aligner(opt.aligner_model_path)
         model.ref_first = opt.ref_first
         model.fusion_token_type = opt.fusion_token_type
-        model.use_cross_attention_fusion = opt.use_cross_attention_fusion
+        model.fusion_type = opt.fusion_type
         
         # Create cross-attention fusion module if needed, using ref_blend_weight as alpha
-        if opt.use_cross_attention_fusion:
+        if opt.fusion_type == "cross_attention":
             model.cross_attention_fusion = CrossAttentionFusion(dim=1024, alpha=opt.ref_blend_weight).to(model.device)
 
     if opt.plms:
@@ -417,7 +419,8 @@ def main(opt):
         return s.replace(" ", "_").replace("/", "_").replace("-", "_").lower()
 
     wandb_run_name = (
-        f"prompt={clean(opt.prompt)[:30]}"
+        f"fusion_type={opt.fusion_type}"
+        f"|prompt={clean(opt.prompt)[:30]}"
         f"|ref={os.path.splitext(os.path.basename(opt.ref_img))[0] if opt.ref_img else 'noref'}"
         f"|alpha={opt.ref_blend_weight}"
     )

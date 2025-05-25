@@ -539,7 +539,7 @@ class LatentDiffusion(DDPM):
                  use_ref_img=False,
                  ref_blend_weight=0.05,  # Add control for text-image blending
                  ref_first=False,  # Add this parameter,
-                 use_cross_attention_fusion=False,  
+                 fusion_type="alpha_blend",  
                  fusion_token_type="all", # "cls_only", "except_cls", "all"
                  *args, **kwargs):
         self.force_null_conditioning = force_null_conditioning
@@ -591,7 +591,7 @@ class LatentDiffusion(DDPM):
         self.use_ref_img = use_ref_img
         self.ref_blend_weight = ref_blend_weight
         self.ref_first = ref_first  # Add this line
-        self.use_cross_attention_fusion = use_cross_attention_fusion
+        self.fusion_type = fusion_type
         self.fusion_token_type = fusion_token_type
 
 
@@ -727,6 +727,15 @@ class LatentDiffusion(DDPM):
             image_features = self.clip_model(ref_image, exclude_cls=exclude_cls)  # [B, N_tokens, D]
             image_features = self.image_to_text_aligner(image_features).squeeze(0)  # [N_tokens, D]
             
+            if self.fusion_type == "alpha_blend":
+                image_features = image_features.mean(dim=0) # [D]
+                print(f"Image features shape: {image_features.shape}")
+                print(f"Text features shape: {c.shape}")
+                # Blend text and image features
+                alpha = self.ref_blend_weight
+                c = (1 - alpha) * c + alpha * image_features
+                return c
+            
             # Apply additional token filtering if needed
             if self.fusion_token_type == "cls_only":
                 # Use only the first token (CLS token)
@@ -737,7 +746,7 @@ class LatentDiffusion(DDPM):
             # Replicate image token to match batch size
             image_token = image_token.repeat(c.shape[0], 1, 1)  # [B, N_selected, D]
             
-            if self.use_cross_attention_fusion:
+            if self.fusion_type == "cross_attention":
                 # Use cross-attention fusion instead of concatenation
                 c = self.cross_attention_fusion(c, image_token)  # [B, 77, D] -> [B, 77, D]
             else:
