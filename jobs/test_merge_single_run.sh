@@ -24,7 +24,7 @@ uv pip install -e .
 # Determine which command to run
 if [ "$USE_PNO" = "true" ]; then
   echo "🔁 Running with PNO inference"
-  CMD="python scripts/txt2img.py \
+  CMD="python scripts/txt2img_attn.py \
     --prompt \"$PROMPT\" \
     --ckpt \"$CKPT\" \
     --config \"$CONFIG\" \
@@ -46,7 +46,7 @@ if [ "$USE_PNO" = "true" ]; then
     --pno_clip_grad_norm 1.0"
 else
   echo "📸 Running standard fusion inference"
-  CMD="python scripts/txt2img.py \
+  CMD="python scripts/txt2img_attn.py \
     --prompt \"$PROMPT\" \
     --ckpt \"$CKPT\" \
     --config \"$CONFIG\" \

@@ -4,13 +4,13 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ROOT_DIR="${SCRIPT_DIR}/.."
 
-ALPHAS=(0.3)
+ALPHAS=(0.0 0.25 0.5 0.75 1.0)
 ALIGNER_VERSIONS=("v1")
 ALIGNER_DATASETS=("coco")
 ALIGNER_LOSSES=("infonce")
 
 FUSION_TOKEN_TYPES=("all")
-FUSION_TYPES=("alpha_blend" "cross_attention" "concat")
+FUSION_TYPES=("alpha_blend")
 USE_PNO_OPTIONS=("false")
 
 PROMPT="a photo of a cat"
