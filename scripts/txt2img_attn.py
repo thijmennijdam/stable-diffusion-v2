@@ -29,7 +29,7 @@ import math
 from PIL import Image
 import re
 
-
+# ------ Attention code step 0/4 ------
 # -- Update for visualization of attention maps --
 from ldm.modules.attention import BasicTransformerBlock, CrossAttention
 
@@ -244,7 +244,7 @@ def overlay_grid(img_pil, heatmaps, titles=None, alpha=0.6, figsize_per_plot=4):
 
     return fig
 
-
+# ------ Attention code step 0/4 ------
 
 load_dotenv()
 
@@ -487,8 +487,9 @@ def main(opt):
     device = torch.device("cuda") if opt.device == "cuda" else torch.device("cpu")
     model = load_model_from_config(config, f"{opt.ckpt}", device)
     
+    # ------ Attention code step 1/4 ------
     attn = AttnStore(model.model.diffusion_model)
-
+    # ------ Attention code step 1/4 ------
     
     # Set the blend weight for the reference image
     if opt.ref_img:
@@ -706,7 +707,7 @@ def main(opt):
                     c = model.get_learned_conditioning(prompts, ref_image=ref_image)
                     shape = [opt.C, opt.H // opt.f, opt.W // opt.f]
                     
-                    # -- Update for visualization of attention maps --
+                    # ------ Attention code step 2/4 ------
                     attn.clear()
 
                     samples, _ = sampler.sample(S=opt.steps,
@@ -720,6 +721,8 @@ def main(opt):
                                                      x_T=start_code,
                                                      img_callback=wandb_img_callback)
                     
+                    # ------ Attention code step 2/4 ------
+                    
 
                     # before decoding samples or doing anything that breaks the computation graph
                     
@@ -727,12 +730,13 @@ def main(opt):
                     x_samples = model.decode_first_stage(samples)
                     x_samples = torch.clamp((x_samples + 1.0) / 2.0, min=0.0, max=1.0)
 
-                    # Debug attention store if needed
+                    # ------ Attention code step 3/4 ------
                     if opt.debug_attn:
                         print("\nAttention Store Contents:")
                         for key, maps in attn.store.items():
                             if maps:
                                 print(f"Layer {key}: {len(maps)} maps, shape: {maps[0].shape}")
+                    # ------ Attention code step 3/4 ------
 
                     print(f"Number of samples: {len(x_samples)}")
                     print(f"batch size: {batch_size}, n_rows: {n_rows}")
@@ -744,7 +748,7 @@ def main(opt):
 
             
                         
-                        # Kleine blokken
+                        # ------ Attention code step 4/4 ------
 
                         cond_heatmaps, uncond_heatmaps, used_names = build_heatmaps(attn, opt.H, opt.W, batch_size=opt.n_samples, sample_idx=sample_idx)
 
@@ -763,6 +767,8 @@ def main(opt):
                         fig_uncond = overlay_grid(img, uncond_heatmaps, titles=used_names)
                         fig_uncond.savefig(f"{sample_path}/{base_count:05}_attn_uncond.png", dpi=300)
                         plt.close(fig_uncond)
+                        
+                        # ------ Attention code step 4/4 ------
 
 
 
