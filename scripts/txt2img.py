@@ -1,4 +1,5 @@
-import argparse, os
+import argparse
+import os
 import cv2
 from datetime import datetime
 import torch
@@ -19,10 +20,11 @@ from ldm.util import instantiate_from_config
 from ldm.models.diffusion.ddim import DDIMSampler # Ensure this is your MODIFIED DDIMSampler
 from ldm.models.diffusion.plms import PLMSSampler
 from ldm.models.diffusion.dpm_solver import DPMSolverSampler
-from torchvision import transforms # Keep for standard pipeline ref_image preproc
-
+from ldm.models.diffusion.ddpm import CrossAttentionFusion
 # Import PNO functions from scripts.pno
 from scripts.vcf.pno import instantiate_clip_model_for_pno_trajectory_loss, optimize_prompt_noise_trajectory
+from torchvision import transforms
+
 
 load_dotenv()
 # REMOVED: torch.set_grad_enabled(False)
@@ -240,6 +242,25 @@ def parse_args():
     pno_group.add_argument("--pno_noise_reg_shuffles", type=int, default=20, help="Shuffles for PNO noise regularization.")
     pno_group.add_argument("--pno_disable_reg", action='store_true', help="Disable PNO noise regularization.")
     pno_group.add_argument("--pno_clip_grad_norm", type=float, default=1.0, help="Max norm for gradient clipping in PNO (0 to disable).")
+    parser.add_argument(
+        "--ref_first",
+        action='store_true',
+        help="If set, reference image features will be concatenated before text features",
+    )
+    parser.add_argument(
+        "--fusion_token_type",
+        type=str,
+        default="all",
+        choices=["cls_only", "except_cls", "all"],
+        help="Which image tokens to use for fusion: 'cls_only' (just CLS token), 'except_cls' (all except CLS), 'all' (all tokens)"
+    )
+    parser.add_argument(
+        "--fusion_type",
+        type=str,
+        default="alpha_blend",
+        choices=["alpha_blend", "cross_attention", "concat"],
+        help="Use cross-attention fusion instead of concatenation"
+    )
     
     opt = parser.parse_args()
     return opt
@@ -266,6 +287,13 @@ def main(opt):
         model.set_use_ref_img(True)
         model.create_ref_img_encoder()
         model.create_image_to_text_aligner(opt.aligner_model_path)
+        model.ref_first = opt.ref_first
+        model.fusion_token_type = opt.fusion_token_type
+        model.fusion_type = opt.fusion_type
+        
+        # Create cross-attention fusion module if needed, using ref_blend_weight as alpha
+        if opt.fusion_type == "cross_attention":
+            model.cross_attention_fusion = CrossAttentionFusion(dim=1024, alpha=opt.ref_blend_weight).to(model.device)
 
     if opt.plms:
         sampler = PLMSSampler(model, device=device)
@@ -314,7 +342,9 @@ def main(opt):
     if opt.ref_img:
         if os.path.exists(opt.ref_img):
             ref_image = Image.open(opt.ref_img).convert("RGB")
-            ref_image = transforms.ToTensor()(ref_image).unsqueeze(0).to(device)
+            ref_image = transforms.ToTensor()(ref_image).to(device).unsqueeze(0) 
+            # scale to -1 to 1
+            # ref_image = (ref_image - 0.5) * 2           
         else:
             print(f"Warning: Reference image {opt.ref_img} not found.")
             if opt.use_pno_trajectory: raise ValueError("PNO trajectory requires a valid --ref_img.")
@@ -403,18 +433,26 @@ def main(opt):
 
     def clean(s):
         return s.replace(" ", "_").replace("/", "_").replace("-", "_").lower()
-    wandb_run_name_parts = [f"prompt={clean(opt.prompt)[:30]}" if not opt.from_file else "from_file"]
-    if opt.ref_img: 
-        wandb_run_name_parts.append(f"ref_img={clean(os.path.splitext(os.path.basename(opt.ref_img))[0])}")
-    else: 
-        wandb_run_name_parts.append("no_ref_img")
-    if opt.use_pno_trajectory:
-        wandb_run_name_parts.append("PNO") 
-    if opt.ref_img: 
-        wandb_run_name_parts.append(f"alpha={opt.ref_blend_weight}")
+
+    wandb_run_name = (
+        "pno" if opt.use_pno_trajectory else "standard"
+        f"|fusion_type={opt.fusion_type}"
+        f"|prompt={clean(opt.prompt)[:30]}"
+        f"|ref_img={os.path.splitext(os.path.basename(opt.ref_img))[0] if opt.ref_img else 'noref'}"
+        f"|alpha={opt.ref_blend_weight}"
+    )
+
+    opt.loss = "cosine" if "cosine" in opt.aligner_model_path else "infonce"
+    opt.exclude_cls = True if opt.fusion_token_type == "except_cls" else False
     opt.create_date = datetime.now().strftime("%d-%m-%Y_%H-%M-%S")
 
-    wandb.init(project=opt.wandb_project, entity=opt.wandb_entity, name="|".join(wandb_run_name_parts), config=vars(opt))
+    wandb.init(
+        project=opt.wandb_project, 
+        entity=opt.wandb_entity,
+        name=wandb_run_name,
+        config=vars(opt), # add all the configs in the wandb run
+    )
+
 
     outer_grad_context = nullcontext() if opt.use_pno_trajectory else torch.no_grad()
     precision_scope_device = opt.device if opt.device == "cuda" else "cpu"

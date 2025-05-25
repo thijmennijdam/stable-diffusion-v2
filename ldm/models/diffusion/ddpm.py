@@ -19,6 +19,8 @@ from tqdm import tqdm
 from torchvision.utils import make_grid
 from pytorch_lightning.utilities.distributed import rank_zero_only
 from omegaconf import ListConfig
+import math
+import torch.nn.functional as F
 
 from ldm.util import log_txt_as_img, exists, default, ismap, isimage, mean_flat, count_params, instantiate_from_config
 from ldm.modules.ema import LitEma
@@ -113,7 +115,7 @@ class DDPM(pl.LightningModule):
             self.init_from_ckpt(ckpt_path, ignore_keys=ignore_keys, only_model=load_only_unet)
             if reset_ema:
                 assert self.use_ema
-                print(f"Resetting ema to pure model weights. This is useful when restoring from an ema-only checkpoint.")
+                print("Resetting ema to pure model weights. This is useful when restoring from an ema-only checkpoint.")
                 self.model_ema = LitEma(self.model)
         if reset_num_ema_updates:
             print(" +++++++++++ WARNING: RESETTING NUM_EMA UPDATES TO ZERO +++++++++++ ")
@@ -226,7 +228,7 @@ class DDPM(pl.LightningModule):
                     desc="Fitting old weights to new weights",
                     total=n_params
             ):
-                if not name in sd:
+                if name not in sd:
                     continue
                 old_shape = sd[name].shape
                 new_shape = param.shape
@@ -536,6 +538,9 @@ class LatentDiffusion(DDPM):
                  force_null_conditioning=False,
                  use_ref_img=False,
                  ref_blend_weight=0.05,  # Add control for text-image blending
+                 ref_first=False,  # Add this parameter,
+                 fusion_type="alpha_blend",  
+                 fusion_token_type="all", # "cls_only", "except_cls", "all"
                  *args, **kwargs):
         self.force_null_conditioning = force_null_conditioning
         self.num_timesteps_cond = default(num_timesteps_cond, 1)
@@ -575,7 +580,7 @@ class LatentDiffusion(DDPM):
             if reset_ema:
                 assert self.use_ema
                 print(
-                    f"Resetting ema to pure model weights. This is useful when restoring from an ema-only checkpoint.")
+                    "Resetting ema to pure model weights. This is useful when restoring from an ema-only checkpoint.")
                 self.model_ema = LitEma(self.model)
         if reset_num_ema_updates:
             print(" +++++++++++ WARNING: RESETTING NUM_EMA UPDATES TO ZERO +++++++++++ ")
@@ -585,9 +590,9 @@ class LatentDiffusion(DDPM):
         ################################
         self.use_ref_img = use_ref_img
         self.ref_blend_weight = ref_blend_weight
-
-        if self.use_ref_img:
-            self.create_ref_img_encoder()
+        self.ref_first = ref_first  # Add this line
+        self.fusion_type = fusion_type
+        self.fusion_token_type = fusion_token_type
 
 
     def create_ref_img_encoder(self):
@@ -707,18 +712,53 @@ class LatentDiffusion(DDPM):
         if self.use_ref_img and ref_image is not None:
             ref_image = ref_image.to(self.device)
 
-            # Extract and normalize CLIP image features
-            image_features = self.clip_model(ref_image) # [B, D]
-            image_features = self.image_to_text_aligner(image_features).squeeze(0) # [N_patch, D]
-            image_features = image_features.mean(dim=0) # [D]
-            print(f"Image features shape: {image_features.shape}")
-            print(f"Text features shape: {c.shape}")
-            # Blend text and image features
-            alpha = self.ref_blend_weight
-            c = (1 - alpha) * c + alpha * image_features
+            # Configure exclude_cls based on fusion_token_type
+            if self.fusion_token_type == "cls_only":
+                # exclude_cls = False  # Get all tokens including CLS
+                self.clip_model.exclude_cls = False
+            elif self.fusion_token_type == "except_cls":
+                # exclude_cls = True   # Exclude CLS token
+                self.clip_model.exclude_cls = True
+            elif self.fusion_token_type == "all":
+                # exclude_cls = False  # Get all tokens including CLS
+                self.clip_model.exclude_cls = False
+            else:
+                raise ValueError(f"Invalid fusion_token_type: {self.fusion_token_type}. "
+                               f"Must be one of: 'cls_only', 'except_cls', 'all'")
 
-        ## --------- End of Visual Concept Fusion implementation --------- ##
-        
+            # Extract CLIP image features with appropriate exclude_cls setting
+            image_features = self.clip_model(ref_image)  # [B, N_tokens, D]
+            image_features = self.image_to_text_aligner(image_features).squeeze(0)  # [N_tokens, D]
+            
+            if self.fusion_type == "alpha_blend":
+                image_features = image_features.mean(dim=0) # [D]
+                print(f"Image features shape: {image_features.shape}")
+                print(f"Text features shape: {c.shape}")
+                # Blend text and image features
+                alpha = self.ref_blend_weight
+                c = (1 - alpha) * c + alpha * image_features
+                return c
+            
+            # Apply additional token filtering if needed
+            if self.fusion_token_type == "cls_only":
+                # Use only the first token (CLS token)
+                image_features = image_features[:1, :]  # [1, D]
+            # For "except_cls" and "all", no additional filtering needed as exclude_cls handles it
+            
+            image_token = image_features.unsqueeze(0)  # [1, N_selected, D]
+            # Replicate image token to match batch size
+            image_token = image_token.repeat(c.shape[0], 1, 1)  # [B, N_selected, D]
+            
+            if self.fusion_type == "cross_attention":
+                # Use cross-attention fusion instead of concatenation
+                c = self.cross_attention_fusion(c, image_token)  # [B, 77, D] -> [B, 77, D]
+            else:
+                # Original concatenation approach
+                if self.ref_first:
+                    c = torch.cat([image_token, c], dim=1)  # [B, N_selected+77, D]
+                else:
+                    c = torch.cat([c, image_token], dim=1)  # [B, 77+N_selected, D]
+
         return c
     
 
@@ -1189,6 +1229,7 @@ class LatentDiffusion(DDPM):
                 c[i] = repeat(c[i], '1 ... -> b ...', b=batch_size).to(self.device)
         else:
             c = repeat(c, '1 ... -> b ...', b=batch_size).to(self.device)
+        
         return c
 
     @torch.no_grad()
@@ -1931,7 +1972,7 @@ class ImageEmbeddingConditionedLatentDiffusion(LatentDiffusion):
 
         uc_ = {"c_crossattn": [uc], "c_adm": c["c_adm"]}
         ema_scope = self.ema_scope if kwargs.get('use_ema_scope', True) else nullcontext
-        with ema_scope(f"Sampling"):
+        with ema_scope("Sampling"):
             samples_cfg, _ = self.sample_log(cond=c, batch_size=N, ddim=True,
                                              ddim_steps=kwargs.get('ddim_steps', 50), eta=kwargs.get('ddim_eta', 0.),
                                              unconditional_guidance_scale=unconditional_guidance_scale,
@@ -1939,3 +1980,53 @@ class ImageEmbeddingConditionedLatentDiffusion(LatentDiffusion):
             x_samples_cfg = self.decode_first_stage(samples_cfg)
             log[f"samplescfg_scale_{unconditional_guidance_scale:.2f}"] = x_samples_cfg
         return log
+
+class CrossAttentionFusion(nn.Module):
+    def __init__(self, dim=1024, alpha=0.1):
+        super().__init__()
+        self.scale = math.sqrt(dim) # Scale for attention scores, assumes Q_norm @ K_norm.T
+        self.alpha = nn.Parameter(torch.tensor(alpha))
+
+    def forward(self, text_tokens, image_tokens):
+        # text_tokens: [B, 77, D] - Current norm ~33
+        # image_tokens: [B, N_img, D] - Current norm ~3.5
+
+        original_text_tokens = text_tokens.clone() # Preserve for final fusion, norm ~33
+
+        # --- 1. Calculate target magnitude from text_tokens ---
+        # Using mean norm across batch and sequence for a single scalar target
+        with torch.no_grad(): # Avoid tracking gradients for this calculation
+            text_magnitude_target = torch.norm(text_tokens, p=2, dim=-1, keepdim=True).mean()
+        
+        print(f"Alpha: {self.alpha.item():.4f}")
+        print(f"Original Text norm: {torch.norm(text_tokens, dim=-1).mean():.4f}")
+        print(f"Original Image norm: {torch.norm(image_tokens, dim=-1).mean():.4f}")
+        print(f"Target magnitude for scaling: {text_magnitude_target.item():.4f}")
+
+        # --- 2. Scale image_tokens to match target_magnitude ---
+        # These will be the "values" in attention
+        image_tokens_scaled_to_text_norm = F.normalize(image_tokens, p=2, dim=-1) * text_magnitude_target
+        print(f"Image tokens scaled to text norm, new norm: {torch.norm(image_tokens_scaled_to_text_norm, dim=-1).mean():.4f}")
+
+        # --- 3. Normalize tokens for calculating attention scores (Q and K) ---
+        # This ensures attention scores are based on angular similarity
+        text_tokens_for_attn_scores = F.normalize(original_text_tokens, p=2, dim=-1) # Query, norm ~1
+        image_tokens_for_attn_scores = F.normalize(image_tokens_scaled_to_text_norm, p=2, dim=-1) # Key, norm ~1
+        
+        # --- 4. Calculate Attention ---
+        # Q_norm @ K_norm.T ensures scores are in a reasonable range for softmax
+        attn_scores = torch.matmul(text_tokens_for_attn_scores, image_tokens_for_attn_scores.transpose(-2, -1))
+        attn_scores = attn_scores / self.scale # self.scale is appropriate here
+        attn_weights = F.softmax(attn_scores, dim=-1)
+
+        # --- 5. Attend to the high-magnitude scaled image tokens (Values) ---
+        # attended_image will now have a norm close to text_magnitude_target (~33)
+        attended_image = torch.matmul(attn_weights, image_tokens_scaled_to_text_norm)
+        print(f"Attended image (after attention with scaled values), norm: {torch.norm(attended_image, dim=-1).mean():.4f}")
+
+        # --- 6. Fusion ---
+        # Both original_text_tokens and attended_image now have similar magnitudes (~33)
+        fused = (1 - self.alpha) * original_text_tokens + self.alpha * attended_image
+        print(f"Final Fused norm: {torch.norm(fused, dim=-1).mean():.4f}")
+        
+        return fused

@@ -144,7 +144,7 @@ def optimize_prompt_noise_trajectory(
                 "PNO Intermediate Sample": wandb.Image(initial_x_sample_viz_np.astype(np.uint8), 
                                                   caption=f"PNO Opt Step 0/{opt_cmd.pno_steps} (Initial)"),
                 "CLIP Loss (prompt)": initial_objective_loss.item(),
-                "Noise Regularization Loss": initial_reg_term.item(), 
+                "Noise Regularization Loss": opt_cmd.pno_noise_reg_gamma * initial_reg_term.item(), 
                 "PNO Total Loss": (initial_objective_loss + opt_cmd.pno_noise_reg_gamma * initial_reg_term).item(),
             }, step=-1) 
 
@@ -199,7 +199,7 @@ def optimize_prompt_noise_trajectory(
                         "PNO Intermediate Sample": wandb.Image(x_sample_viz_np.astype(np.uint8), 
                                                           caption=f"PNO Opt Step {pno_step_idx + 1}/{opt_cmd.pno_steps}"),
                         "CLIP Loss (prompt)": objective_loss.item(),
-                        "Noise Regularization Loss": reg_term.item(),
+                        "Noise Regularization Loss": opt_cmd.pno_noise_reg_gamma * reg_term.item(),
                         "PNO Total Loss": total_loss.item(),
                     }, step=pno_step_idx) 
     

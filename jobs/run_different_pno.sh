@@ -23,7 +23,8 @@ wait_for_available_slot() {
 }
 
 # Alphas and model paths
-ALPHAS=(0.1 0.2 0.3)
+# ALPHAS=(0.1 0.2 0.3)
+ALPHAS=(0.1)
 ALIGNER_MODELS=(
   "/scratch-shared/holy-triangle/weights/img2text_aligner_fixed/flickr30k_infonce/model_best.pth"
 )
@@ -33,7 +34,7 @@ REF_IMG="${ROOT_DIR}/data/van_gogh_starry_night.jpg"
 CONFIG="${ROOT_DIR}/configs/stable-diffusion/v2-inference-v.yaml"
 CKPT="/scratch-shared/holy-triangle/weights/stable-diffusion-2-1/v2-1_768-ema-pruned.ckpt"
 
-JOB_SCRIPT="${ROOT_DIR}/jobs/run_single_alpha.sh"
+JOB_SCRIPT="${ROOT_DIR}/jobs/run_single_pno.sh"
 
 for ALIGNER_MODEL in "${ALIGNER_MODELS[@]}"; do
   SAFE_MODEL_NAME=$(sanitize "$ALIGNER_MODEL")

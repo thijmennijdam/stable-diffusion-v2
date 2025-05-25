@@ -12,16 +12,17 @@ cd "$ROOT_DIR" || exit 1
 
 # source activate ldmv2
 source .venv/bin/activate
+# uv pip install -e .
 
-cd "$ROOT_DIR"
-
+echo "Running: uv run python scripts/txt2img.py ... --aligner_model_path $ALIGNER_MODEL"
 # 🚀 PNO inference
-python scripts/txt2img.py \
+uv run python scripts/txt2img.py \
   --prompt "$PROMPT" \
   --ckpt "$CKPT" \
   --config "$CONFIG" \
   --H 512 --W 512 \
   --ref_blend_weight "$ALPHA" \
+  --aligner_model_path "$ALIGNER_MODEL" \
   --n_samples 1 \
   --n_iter 1 \
   --use_pno_trajectory \
@@ -31,4 +32,3 @@ python scripts/txt2img.py \
   --lr_noise 1e-2 \
   --pno_noise_reg_gamma 0.1 \
   --pno_clip_grad_norm 1.0 \
-  --steps 50

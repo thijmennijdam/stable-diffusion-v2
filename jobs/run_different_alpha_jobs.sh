@@ -25,14 +25,15 @@ wait_for_available_slot() {
 }
 
 # Alphas and model paths
-ALPHAS=(0.1 0.2 0.3)
+# ALPHAS=(0.1 0.2 0.3)
+ALPHAS=(0.3)
 ALIGNER_MODELS=(
   "/scratch-shared/holy-triangle/weights/img2text_aligner_fixed/flickr30k_infonce/model_best.pth"
 )
 
 # Inference arguments
 PROMPT="a photo of a cat"
-REF_IMG="${ROOT_DIR}/data/van_gogh_starry_night.jpg"
+REF_IMG="${ROOT_DIR}/data/sketch_penguin.jpg"
 CONFIG="${ROOT_DIR}/configs/stable-diffusion/v2-inference-v.yaml"
 CKPT="/scratch-shared/holy-triangle/weights/stable-diffusion-2-1/v2-1_768-ema-pruned.ckpt"
 
