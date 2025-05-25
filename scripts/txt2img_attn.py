@@ -560,7 +560,8 @@ def main(opt):
 
         # Construct aligner model path
         aligner_model_path = (
-            f"weights/aligner_models/version_{opt.aligner_version}/"
+            
+            f"/scratch-shared/holy-triangle/weights/aligner_models/version_{opt.aligner_version}/"
             f"dataset_{opt.aligner_dataset}/"
             f"loss_{opt.aligner_loss}/"
             f"batch_{opt.aligner_batch_size}/"
