@@ -1,4 +1,5 @@
-import argparse, os
+import argparse
+import os
 import cv2
 from datetime import datetime
 import torch
@@ -20,6 +21,7 @@ from ldm.models.diffusion.ddim import DDIMSampler
 from ldm.models.diffusion.plms import PLMSSampler
 from ldm.models.diffusion.dpm_solver import DPMSolverSampler
 from torchvision import transforms
+from ldm.models.diffusion.ddpm import CrossAttentionFusion
 
 load_dotenv()
 
@@ -229,6 +231,25 @@ def parse_args():
         default="weights/img2text_aligner/coco_cosine/model_best.pth",
         help="Path to the aligner model. If not specified, the default model will be used.",
     )
+    parser.add_argument(
+        "--ref_first",
+        action='store_true',
+        help="If set, reference image features will be concatenated before text features",
+    )
+    parser.add_argument(
+        "--fusion_token_type",
+        type=str,
+        default="all",
+        choices=["cls_only", "except_cls", "all"],
+        help="Which image tokens to use for fusion: 'cls_only' (just CLS token), 'except_cls' (all except CLS), 'all' (all tokens)"
+    )
+    parser.add_argument(
+        "--fusion_type",
+        type=str,
+        default="alpha_blend",
+        choices=["alpha_blend", "cross_attention", "concat"],
+        help="Use cross-attention fusion instead of concatenation"
+    )
     
     opt = parser.parse_args()
     return opt
@@ -259,6 +280,13 @@ def main(opt):
         model.set_use_ref_img(True)
         model.create_ref_img_encoder()
         model.create_image_to_text_aligner(opt.aligner_model_path)
+        model.ref_first = opt.ref_first
+        model.fusion_token_type = opt.fusion_token_type
+        model.fusion_type = opt.fusion_type
+        
+        # Create cross-attention fusion module if needed, using ref_blend_weight as alpha
+        if opt.fusion_type == "cross_attention":
+            model.cross_attention_fusion = CrossAttentionFusion(dim=1024, alpha=opt.ref_blend_weight).to(model.device)
 
     if opt.plms:
         sampler = PLMSSampler(model, device=device)
@@ -308,7 +336,7 @@ def main(opt):
             ref_image = Image.open(opt.ref_img).convert("RGB")
             ref_image = transforms.ToTensor()(ref_image).to(device).unsqueeze(0) 
             # scale to -1 to 1
-            ref_image = (ref_image - 0.5) * 2           
+            # ref_image = (ref_image - 0.5) * 2           
         else:
             print(f"Warning: Reference image not found at {opt.ref_img}. Skipping.")
     else:
@@ -391,13 +419,14 @@ def main(opt):
         return s.replace(" ", "_").replace("/", "_").replace("-", "_").lower()
 
     wandb_run_name = (
-        f"prompt={clean(opt.prompt)[:30]}"
+        f"fusion_type={opt.fusion_type}"
+        f"|prompt={clean(opt.prompt)[:30]}"
         f"|ref={os.path.splitext(os.path.basename(opt.ref_img))[0] if opt.ref_img else 'noref'}"
         f"|alpha={opt.ref_blend_weight}"
     )
 
     opt.loss = "cosine" if "cosine" in opt.aligner_model_path else "infonce"
-    opt.exclude_cls = True
+    opt.exclude_cls = True if opt.fusion_token_type == "except_cls" else False
     opt.create_date = datetime.now().strftime("%d-%m-%Y_%H-%M-%S")
 
     wandb.init(

@@ -190,6 +190,8 @@ class DDIMSampler(object):
         else:
             x_in = torch.cat([x] * 2)
             t_in = torch.cat([t] * 2)
+            
+            # Handle the case where c and unconditional_conditioning have different shapes
             if isinstance(c, dict):
                 assert isinstance(unconditional_conditioning, dict)
                 c_in = dict()
@@ -208,7 +210,21 @@ class DDIMSampler(object):
                 for i in range(len(c)):
                     c_in.append(torch.cat([unconditional_conditioning[i], c[i]]))
             else:
+                # If shapes don't match, pad the shorter one with zeros
+                if c.shape[1] != unconditional_conditioning.shape[1]:
+                    if c.shape[1] > unconditional_conditioning.shape[1]:
+                        # Pad unconditional_conditioning
+                        pad_size = c.shape[1] - unconditional_conditioning.shape[1]
+                        pad = torch.zeros((unconditional_conditioning.shape[0], pad_size, unconditional_conditioning.shape[2]), 
+                                        device=unconditional_conditioning.device)
+                        unconditional_conditioning = torch.cat([unconditional_conditioning, pad], dim=1)
+                    else:
+                        # Pad c
+                        pad_size = unconditional_conditioning.shape[1] - c.shape[1]
+                        pad = torch.zeros((c.shape[0], pad_size, c.shape[2]), device=c.device)
+                        c = torch.cat([c, pad], dim=1)
                 c_in = torch.cat([unconditional_conditioning, c])
+            
             model_uncond, model_t = self.model.apply_model(x_in, t_in, c_in).chunk(2)
             model_output = model_uncond + unconditional_guidance_scale * (model_t - model_uncond)
 
