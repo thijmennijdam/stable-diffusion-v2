@@ -103,14 +103,9 @@ class AttnStore:
                 break
 
         # 2) Grab the transformer index
-        tr_name = ""
-        if "transformer_blocks" in parts:
-            j = parts.index("transformer_blocks")
-            if j+1 < len(parts) and parts[j+1].isdigit():
-                tr_name = f"- T{parts[j+1]}"
 
         if block_name:
-            return f"{block_name} {tr_name}".strip()
+            return f"{block_name}".strip()
         else:
             # fallback
             return f"Layer {idx}"
@@ -244,7 +239,9 @@ def overlay_grid(img_pil, heatmaps, titles=None, alpha=0.6, figsize_per_plot=4):
         title = titles[i] if titles and i < len(titles) else f"Heatmap {i}"
         axes[i + 1].set_title(title, pad=10)
 
-    plt.tight_layout()
+    # Remove plt.tight_layout()
+    fig.subplots_adjust(top=0.85)  # or 0.88, adjust as needed
+
     return fig
 
 
