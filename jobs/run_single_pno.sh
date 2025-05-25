@@ -5,12 +5,13 @@ echo "Alpha: ${ALPHA}"
 echo "Prompt: ${PROMPT}"
 echo "Ref Image: ${REF_IMG}"
 
-module purge
-module load 2023
-module load Anaconda3/2023.07-2
-module load CUDA/12.1.1
+module load 2022
+module load CUDA/11.7.0
 
-source activate ldmv2
+cd "$ROOT_DIR" || exit 1
+
+# source activate ldmv2
+source .venv/bin/activate
 
 cd "$ROOT_DIR"
 

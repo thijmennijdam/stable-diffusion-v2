@@ -1,6 +1,6 @@
 #!/bin/bash
 
-ROOT_DIR="/home/azywot/FOMO/stable-diffusion-v2"
+ROOT_DIR="/home/scur2690/stable-diffusion-v2"
 
 # Throttling parameters
 MAX_JOBS=3
@@ -49,7 +49,7 @@ for ALIGNER_MODEL in "${ALIGNER_MODELS[@]}"; do
     sbatch \
       --job-name="pno_a${ALPHA}" \
       --output="${ROOT_DIR}/outputs/jobs/pno_a${ALPHA}_p${SAFE_PROMPT}_%A.out" \
-      --partition=gpu_h100 \
+      --partition=gpu_a100 \
       --gpus=1 \
       --cpus-per-task=16 \
       --time=00:05:00 \
