@@ -714,17 +714,20 @@ class LatentDiffusion(DDPM):
 
             # Configure exclude_cls based on fusion_token_type
             if self.fusion_token_type == "cls_only":
-                exclude_cls = False  # Get all tokens including CLS
+                # exclude_cls = False  # Get all tokens including CLS
+                self.clip_model.exclude_cls = False
             elif self.fusion_token_type == "except_cls":
-                exclude_cls = True   # Exclude CLS token
+                # exclude_cls = True   # Exclude CLS token
+                self.clip_model.exclude_cls = True
             elif self.fusion_token_type == "all":
-                exclude_cls = False  # Get all tokens including CLS
+                # exclude_cls = False  # Get all tokens including CLS
+                self.clip_model.exclude_cls = False
             else:
                 raise ValueError(f"Invalid fusion_token_type: {self.fusion_token_type}. "
                                f"Must be one of: 'cls_only', 'except_cls', 'all'")
 
             # Extract CLIP image features with appropriate exclude_cls setting
-            image_features = self.clip_model(ref_image, exclude_cls=exclude_cls)  # [B, N_tokens, D]
+            image_features = self.clip_model(ref_image)  # [B, N_tokens, D]
             image_features = self.image_to_text_aligner(image_features).squeeze(0)  # [N_tokens, D]
             
             if self.fusion_type == "alpha_blend":
@@ -902,7 +905,7 @@ class LatentDiffusion(DDPM):
         return out
 
     @torch.no_grad()
-    def decode_first_stage(self, z, predict_cids=False, force_not_quantize=False):
+    def decode_first_stage(self, z, predict_cids=False, force_not_quantize=False, enable_grad=False):
         if predict_cids:
             if z.dim() == 4:
                 z = torch.argmax(z.exp(), dim=1).long()

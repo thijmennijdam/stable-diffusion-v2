@@ -1,38 +1,37 @@
 #!/bin/bash
-#SBATCH --partition=gpu_a100
-#SBATCH --gpus=1
-#SBATCH --cpus-per-task=16
-#SBATCH --output=outputs/jobs/run_alpha_${ALPHA}_%A.out
-#SBATCH --time=01:00:00
-#SBATCH --mem=40G
 
-echo "Running job for alpha=${ALPHA} in $ROOT_DIR"
+echo "✅ Job started at: $(date)"
+echo "Alpha: ${ALPHA}"
+echo "Prompt: ${PROMPT}"
+echo "Ref Image: ${REF_IMG}"
+echo "Aligner Model: ${ALIGNER_MODEL}"
+echo "Config: ${CONFIG}"
+echo "Checkpoint: ${CKPT}"
+echo "Root Dir: ${ROOT_DIR}"
 
-cd "$ROOT_DIR"
+module load 2022
+module load CUDA/11.7.0
 
-# When using UV on a100
-# source .venv/bin/activate
+cd "$ROOT_DIR" || exit 1
 
-module load 2023
-module load Anaconda3/2023.07-2
-module load CUDA/12.1.1
+# source activate ldmv2
+source .venv/bin/activate
 
-# conda env create -f environment.yaml
-source activate ldmv2
-# conda install pytorch torchvision=0.18.1 pytorch-cuda=12.1 -c pytorch -c nvidia -y
-
-# Build the base command
-CMD="uv run python scripts/txt2img.py \
-  --prompt \"$PROMPT\" \
-  --ckpt \"$CKPT\" \
-  --config \"$CONFIG\" \
+uv run python scripts/txt2img.py \
+  --prompt "$PROMPT" \
+  --ckpt "$CKPT" \
+  --config "$CONFIG" \
   --H 768 --W 768 \
-  --ref_img \"$REF_IMG\" \
-  --ref_blend_weight \"$ALPHA\" \
-  --aligner_model_path \"$ALIGNER_MODEL\" \
-  --fusion_token_type \"$FUSION_TOKEN_TYPE\" \
-  --fusion_type \"$FUSION_TYPE\""
+  --ref_img "$REF_IMG" \
+  --ref_blend_weight "$ALPHA" \
+  --aligner_model_path "$ALIGNER_MODEL"
+echo "✅ Job completed at: $(date)"
 
-
-echo "Running: $CMD"
-eval $CMD
+# uv run python scripts/txt2img.py \
+#   --prompt "a photo of a cat" \
+#   --ckpt "/scratch-shared/holy-triangle/weights/stable-diffusion-2-1/v2-1_768-ema-pruned.ckpt" \
+#   --config "/home/scur2690/stable-diffusion-v2/configs/stable-diffusion/v2-inference-v.yaml" \
+#   --H 768 --W 768 \
+#   --ref_img "/home/scur2690/stable-diffusion-v2/data/van_gogh_starry_night.jpg" \
+#   --ref_blend_weight 0.1 \
+#   --aligner_model_path "/scratch-shared/holy-triangle/weights/img2text_aligner_fixed/flickr30k_infonce/model_best.pth"

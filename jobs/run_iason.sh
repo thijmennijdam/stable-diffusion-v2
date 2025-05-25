@@ -26,10 +26,10 @@ FUSION_TYPES=("alpha_blend" "cross_attention" "concat")
 PROMPT="a photo of a cat"
 REF_IMG="data/sketch_penguin.jpg"
 CONFIG="configs/stable-diffusion/v2-inference-v.yaml"
-CKPT="checkpoints/model_checkpoint.ckpt"
+CKPT="/scratch-shared/holy-triangle/weights/stable-diffusion-2-1/v2-1_768-ema-pruned.ckpt"
 
 # Path to job script
-JOB_SCRIPT="${SCRIPT_DIR}/run_single_alpha.sh"
+JOB_SCRIPT="${SCRIPT_DIR}/run_single_alpha_fuse.sh"
 
 # Create logs directory if it doesn't exist
 mkdir -p "${SCRIPT_DIR}/../logs"
