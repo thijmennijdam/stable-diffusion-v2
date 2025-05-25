@@ -19,7 +19,7 @@ All our experiments are tracked using [Weights and Biases](https://docs.wandb.ai
 4. **Run your experiments**:
     Now you can run normally your experiments e.g.
     ```sh
-    srun --partition=gpu_a100 --gpus=1 --ntasks=1 --cpus-per-task=9 --time=00:20:00 --pty bash -i
+    srun --partition=gpu_a100 --gpus=1 --ntasks=1 --cpus-per-task=9 --time=00:45:00 --pty bash -i
     ```
     Then:
     ```sh

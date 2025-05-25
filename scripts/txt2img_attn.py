@@ -21,6 +21,231 @@ from ldm.models.diffusion.plms import PLMSSampler
 from ldm.models.diffusion.dpm_solver import DPMSolverSampler
 from torchvision import transforms
 
+import matplotlib.pyplot as plt
+import numpy as np, cv2
+from skimage.measure import block_reduce
+import math
+
+from PIL import Image
+import re
+
+# ------ Attention code step 0/4 ------
+# -- Update for visualization of attention maps --
+from ldm.modules.attention import BasicTransformerBlock, CrossAttention
+
+
+"""
+uv run python scripts/txt2img_attn.py \
+  --prompt "a photo of a cat" \
+  --ckpt "/scratch-shared/holy-triangle/weights/stable-diffusion-2-1/v2-1_768-ema-pruned.ckpt" \
+  --config "configs/stable-diffusion/v2-inference-v.yaml" \
+  --H 768 --W 768 \
+  --ref_img "data/cat.jpg" \
+  --ref_blend_weight 0.2 \
+  --aligner_model_path "/scratch-shared/holy-triangle/weights/img2text_aligner_fixed/flickr30k_cosine/model_best.pth"
+"""
+# ---------- hooks ----------
+class AttnStore:
+    def __init__(self, unet, layer_idxs=None):
+        self.store = []
+        self.hooks = []
+        
+        # First, let's see what the actual module names look like
+        print("=== All modules with attn2 ===")
+        attn_modules = []
+        for i, (name, module) in enumerate(unet.named_modules()):
+            if hasattr(module, 'attn2'):
+                print(f"{i:3d}: {name}")
+                attn_modules.append((i, name, module.attn2))
+        
+        print(f"\nFound {len(attn_modules)} attention modules")
+        
+        for name, module in unet.named_modules():
+            if isinstance(module, CrossAttention):
+                print(name, module.heads)
+
+
+        # Use simple indexing for now
+        if layer_idxs is None:
+            if len(attn_modules) >= 3:
+                layer_idxs = [0, len(attn_modules)//2, len(attn_modules)-1]
+            else:
+                layer_idxs = list(range(len(attn_modules)))
+        
+        self.layer_idxs = layer_idxs
+        self.layer_names = []
+        
+        # Hook the selected layers
+        for idx in layer_idxs:
+            if idx < len(attn_modules):
+                orig_idx, name, attn_module = attn_modules[idx]
+                hook = attn_module.register_forward_hook(self._hook(len(self.hooks), name))
+                self.hooks.append(hook)
+                self.layer_names.append(self._make_readable_name(name, orig_idx))
+        
+        print(f"\nHooked layers:")
+        for i, name in enumerate(self.layer_names):
+            print(f"  {i}: {name}")
+
+    def _make_readable_name(self, full_name, idx):
+        parts = full_name.split('.')
+        # 1) Figure out which block this is in
+        block_name = None
+        for kind in ["input_blocks", "down_blocks", "mid_block", "up_blocks", "output_blocks"]:
+            if kind in parts:
+                i = parts.index(kind)
+                # Normalize “mid_block” vs. plural
+                pretty = kind.replace('_', ' ').title().replace('Block', 'Block')
+                block_name = pretty
+                # grab the index if there’s a number right after
+                if i+1 < len(parts) and parts[i+1].isdigit():
+                    block_name += f" {parts[i+1]}"
+                break
+
+        # 2) Grab the transformer index
+
+        if block_name:
+            return f"{block_name}".strip()
+        else:
+            # fallback
+            return f"Layer {idx}"
+
+
+    def _hook(self, hook_idx, name):
+        def fn(module, input, output):
+            # Store with metadata
+            if isinstance(output, tuple) and len(output) > 1:
+                attn_weights = output[1]
+            else:
+                attn_weights = output
+                
+            self.store.append({
+                'hook_idx': hook_idx,
+                'layer_name': name,
+                'attention': attn_weights.detach().cpu(),
+                'step': len(self.store) // len(self.hooks)
+            })
+        return fn
+
+    def clear(self):
+        self.store.clear()
+
+    def remove_hooks(self):
+        for hook in self.hooks:
+            hook.remove()
+        self.hooks.clear()
+
+
+# Simple version of build_heatmaps that works with the debug store
+def build_heatmaps(store, H, W, batch_size=3, sample_idx=0):
+    if not store.store:
+        raise ValueError("No attention maps collected!")
+
+    num_hooks = len(store.hooks)
+    last_maps = store.store[-num_hooks:] if len(store.store) >= num_hooks else store.store
+
+    cond_heatmaps = []
+    uncond_heatmaps = []
+    used_names = []
+
+    for i, entry in enumerate(last_maps):
+        t = entry['attention']
+        print(f"Attention shape: {t.shape}, Layer: {entry['layer_name']}, Hook index: {entry['hook_idx']}")
+
+        if t.ndim == 3:
+            try:
+                t = t.view(2, batch_size, -1, t.shape[-1])  # [cond/uncond, batch, tokens, dim]
+                cond_patch = t[1, sample_idx].mean(-1)
+                uncond_patch = t[0, sample_idx].mean(-1)
+            except:
+                print("[warn] Cannot split into [2, B, Q, D]")
+                continue
+        elif t.ndim == 2:
+            cond_patch = uncond_patch = t.mean(1)
+        else:
+            print(f"[warn] Unexpected attention shape: {t.shape}")
+            continue
+
+        for patch, target in [(cond_patch, cond_heatmaps), (uncond_patch, uncond_heatmaps)]:
+            q = patch.numel()
+            grid = int(math.sqrt(q))
+            if grid * grid != q:
+                print(f"[warn] skipping map with Q={q} (not square)")
+                continue
+
+            heat = patch.view(grid, grid).numpy().astype(np.float32)
+            heat = np.nan_to_num(heat, nan=0.0, posinf=0.0, neginf=0.0)
+
+            heat -= heat.min()
+            if heat.max() > 1e-8:
+                heat /= heat.max()
+            else:
+                heat[:] = 0
+
+            heat = cv2.resize(heat, (W, H), interpolation=cv2.INTER_CUBIC)
+            target.append(heat)
+
+        layer_name = store.layer_names[entry['hook_idx']] if entry['hook_idx'] < len(store.layer_names) else f"Layer {entry['hook_idx']}"
+        used_names.append(layer_name)
+
+    if not cond_heatmaps or not uncond_heatmaps:
+        raise ValueError("No valid heatmaps after filtering.")
+
+    return cond_heatmaps, uncond_heatmaps, used_names
+
+# Usage:
+# store = AttnSt
+
+
+def overlay(img_pil, heat, alpha=0.6, colormap=cv2.COLORMAP_JET):
+    """
+    Overlays a (H,W) heatmap onto a PIL RGB image.
+    """
+    img_pil = img_pil.convert("RGB")
+    
+    # Create heatmap
+    heat_uint8 = (heat * 255).astype(np.uint8)
+    heatmap = cv2.applyColorMap(heat_uint8, colormap)
+    heatmap = cv2.cvtColor(heatmap, cv2.COLOR_BGR2RGB)
+    heatmap = Image.fromarray(heatmap).resize(img_pil.size, Image.LANCZOS)
+    
+    # Blend with original image
+    blended = Image.blend(img_pil, heatmap, alpha)
+    return blended
+
+
+def overlay_grid(img_pil, heatmaps, titles=None, alpha=0.6, figsize_per_plot=4):
+    """
+    Creates a grid visualization of heatmaps overlaid on the image.
+    """
+
+    n = len(heatmaps)
+    fig, axes = plt.subplots(1, n + 1, figsize=((n + 1) * figsize_per_plot, figsize_per_plot))
+    
+    if n == 0:
+        axes = [axes]  # make iterable
+
+    # Show original image first
+    axes[0].imshow(img_pil)
+    axes[0].set_title("Original")
+    axes[0].axis("off")
+
+    # Show each heatmap overlay
+    for i, heat in enumerate(heatmaps):
+        blended = overlay(img_pil, heat, alpha)
+        axes[i + 1].imshow(blended)
+        axes[i + 1].axis("off")
+        
+        title = titles[i] if titles and i < len(titles) else f"Heatmap {i}"
+        axes[i + 1].set_title(title, pad=10)
+
+    # Remove plt.tight_layout()
+    fig.subplots_adjust(top=0.85)  # or 0.88, adjust as needed
+
+    return fig
+
+# ------ Attention code step 0/4 ------
+
 load_dotenv()
 
 torch.set_grad_enabled(False)
@@ -230,6 +455,15 @@ def parse_args():
         help="Path to the aligner model. If not specified, the default model will be used.",
     )
     
+    # -- Update for visualization of attention maps --
+    parser.add_argument("--attn_token", type=str, default=None,
+                    help="token whose attention map is blended; default = first")
+    
+    # Add debug flag
+    parser.add_argument("--debug_attn", action='store_true',
+                    help="Print debug information for attention maps")
+
+    
     opt = parser.parse_args()
     return opt
 
@@ -252,6 +486,10 @@ def main(opt):
     
     device = torch.device("cuda") if opt.device == "cuda" else torch.device("cpu")
     model = load_model_from_config(config, f"{opt.ckpt}", device)
+    
+    # ------ Attention code step 1/4 ------
+    attn = AttnStore(model.model.diffusion_model)
+    # ------ Attention code step 1/4 ------
     
     # Set the blend weight for the reference image
     if opt.ref_img:
@@ -391,20 +629,25 @@ def main(opt):
         return s.replace(" ", "_").replace("/", "_").replace("-", "_").lower()
 
     wandb_run_name = (
-        f"prompt={clean(opt.prompt)[:30]}"
+        f"alpha={opt.ref_blend_weight:.3f}"
+        f"|prompt={clean(opt.prompt)[:30]}"
         f"|ref={os.path.splitext(os.path.basename(opt.ref_img))[0] if opt.ref_img else 'noref'}"
-        f"|alpha={opt.ref_blend_weight}"
+        f"|aligner={'/'.join(opt.aligner_model_path.split('/')[-3:])}"
     )
 
-    opt.loss = "cosine" if "cosine" in opt.aligner_model_path else "infonce"
-    opt.exclude_cls = True
-    opt.create_date = datetime.now().strftime("%d-%m-%Y_%H-%M-%S")
+    # TODO: for now hard coded, to be fixed
+    loss = "cosine" if "cosine" in opt.aligner_model_path else "infonce"
+    exclude_cls = True
 
     wandb.init(
     project=opt.wandb_project, 
     entity=opt.wandb_entity,
     name=wandb_run_name,
-    config=vars(opt), # add all the configs in the wandb run
+    config=vars(opt),
+        tags=[
+            f"loss={loss}",
+            f"exclude_cls={exclude_cls}",
+        ]
     )
 
     precision_scope = autocast if opt.precision=="autocast" or opt.bf16 else nullcontext
@@ -463,6 +706,9 @@ def main(opt):
                         prompts = list(prompts)
                     c = model.get_learned_conditioning(prompts, ref_image=ref_image)
                     shape = [opt.C, opt.H // opt.f, opt.W // opt.f]
+                    
+                    # ------ Attention code step 2/4 ------
+                    attn.clear()
 
                     samples, _ = sampler.sample(S=opt.steps,
                                                      conditioning=c,
@@ -474,15 +720,58 @@ def main(opt):
                                                      eta=opt.ddim_eta,
                                                      x_T=start_code,
                                                      img_callback=wandb_img_callback)
+                    
+                    # ------ Attention code step 2/4 ------
+                    
+
+                    # before decoding samples or doing anything that breaks the computation graph
+                    
 
                     x_samples = model.decode_first_stage(samples)
                     x_samples = torch.clamp((x_samples + 1.0) / 2.0, min=0.0, max=1.0)
 
-                    for x_sample in x_samples:
+                    # ------ Attention code step 3/4 ------
+                    if opt.debug_attn:
+                        print("\nAttention Store Contents:")
+                        for key, maps in attn.store.items():
+                            if maps:
+                                print(f"Layer {key}: {len(maps)} maps, shape: {maps[0].shape}")
+                    # ------ Attention code step 3/4 ------
+
+                    print(f"Number of samples: {len(x_samples)}")
+                    print(f"batch size: {batch_size}, n_rows: {n_rows}")
+                    for sample_idx, x_sample in enumerate(x_samples):
                         x_sample = 255. * rearrange(x_sample.cpu().numpy(), 'c h w -> h w c')
                         img = Image.fromarray(x_sample.astype(np.uint8))
                         img = put_watermark(img, wm_encoder)
                         img.save(os.path.join(sample_path, f"{base_count:05}.png"))
+
+            
+                        
+                        # ------ Attention code step 4/4 ------
+
+                        cond_heatmaps, uncond_heatmaps, used_names = build_heatmaps(attn, opt.H, opt.W, batch_size=opt.n_samples, sample_idx=sample_idx)
+
+
+                        
+                        # check if attention maps are empty
+                        if not cond_heatmaps or not uncond_heatmaps:
+                            print(f"No attention maps collected for sample {base_count:05}. Skipping overlay.")
+                            continue
+                        
+                        
+                        fig_cond = overlay_grid(img, cond_heatmaps, titles=used_names)
+                        fig_cond.savefig(f"{sample_path}/{base_count:05}_attn_cond.png", dpi=300)
+                        plt.close(fig_cond)
+
+                        fig_uncond = overlay_grid(img, uncond_heatmaps, titles=used_names)
+                        fig_uncond.savefig(f"{sample_path}/{base_count:05}_attn_uncond.png", dpi=300)
+                        plt.close(fig_uncond)
+                        
+                        # ------ Attention code step 4/4 ------
+
+
+
                         base_count += 1
                         sample_count += 1
 
