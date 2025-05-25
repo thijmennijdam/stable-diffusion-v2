@@ -1972,30 +1972,49 @@ class ImageEmbeddingConditionedLatentDiffusion(LatentDiffusion):
 class CrossAttentionFusion(nn.Module):
     def __init__(self, dim=1024, alpha=0.1):
         super().__init__()
-        self.scale = math.sqrt(dim)
+        self.scale = math.sqrt(dim) # Scale for attention scores, assumes Q_norm @ K_norm.T
         self.alpha = nn.Parameter(torch.tensor(alpha))
 
     def forward(self, text_tokens, image_tokens):
-        # text_tokens: [B, 77, D] - already normalized from CLIP
-        # image_tokens: [B, N_img, D] - already normalized and aligned
+        # text_tokens: [B, 77, D] - Current norm ~33
+        # image_tokens: [B, N_img, D] - Current norm ~3.5
 
-        # # Normalize for stability
-        # text_tokens = F.normalize(text_tokens, dim=-1)
-        # image_tokens = F.normalize(image_tokens, dim=-1)
+        original_text_tokens = text_tokens.clone() # Preserve for final fusion, norm ~33
 
-        print(f"Alpha: {self.alpha.item():.4f}")
-        print(f"Text norm: {torch.norm(text_tokens, dim=-1).mean():.4f}")
-        print(f"Image norm: {torch.norm(image_tokens, dim=-1).mean():.4f}")
+        # --- 1. Calculate target magnitude from text_tokens ---
+        # Using mean norm across batch and sequence for a single scalar target
+        with torch.no_grad(): # Avoid tracking gradients for this calculation
+            text_magnitude_target = torch.norm(text_tokens, p=2, dim=-1, keepdim=True).mean()
         
-        # Direct attention without additional normalization
-        attn_scores = torch.matmul(text_tokens, image_tokens.transpose(-2, -1))  # [B, 77, N_img]
-        attn_scores = attn_scores / self.scale
-        attn_weights = F.softmax(attn_scores, dim=-1)  # [B, 77, N_img]
+        print(f"Alpha: {self.alpha.item():.4f}")
+        print(f"Original Text norm: {torch.norm(text_tokens, dim=-1).mean():.4f}")
+        print(f"Original Image norm: {torch.norm(image_tokens, dim=-1).mean():.4f}")
+        print(f"Target magnitude for scaling: {text_magnitude_target.item():.4f}")
 
-        # Attend to image features
-        attended_image = torch.matmul(attn_weights, image_tokens)  # [B, 77, D]
+        # --- 2. Scale image_tokens to match target_magnitude ---
+        # These will be the "values" in attention
+        image_tokens_scaled_to_text_norm = F.normalize(image_tokens, p=2, dim=-1) * text_magnitude_target
+        print(f"Image tokens scaled to text norm, new norm: {torch.norm(image_tokens_scaled_to_text_norm, dim=-1).mean():.4f}")
 
-        # Fusion
-        fused = (1 - self.alpha) * text_tokens + self.alpha * attended_image
+        # --- 3. Normalize tokens for calculating attention scores (Q and K) ---
+        # This ensures attention scores are based on angular similarity
+        text_tokens_for_attn_scores = F.normalize(original_text_tokens, p=2, dim=-1) # Query, norm ~1
+        image_tokens_for_attn_scores = F.normalize(image_tokens_scaled_to_text_norm, p=2, dim=-1) # Key, norm ~1
+        
+        # --- 4. Calculate Attention ---
+        # Q_norm @ K_norm.T ensures scores are in a reasonable range for softmax
+        attn_scores = torch.matmul(text_tokens_for_attn_scores, image_tokens_for_attn_scores.transpose(-2, -1))
+        attn_scores = attn_scores / self.scale # self.scale is appropriate here
+        attn_weights = F.softmax(attn_scores, dim=-1)
 
+        # --- 5. Attend to the high-magnitude scaled image tokens (Values) ---
+        # attended_image will now have a norm close to text_magnitude_target (~33)
+        attended_image = torch.matmul(attn_weights, image_tokens_scaled_to_text_norm)
+        print(f"Attended image (after attention with scaled values), norm: {torch.norm(attended_image, dim=-1).mean():.4f}")
+
+        # --- 6. Fusion ---
+        # Both original_text_tokens and attended_image now have similar magnitudes (~33)
+        fused = (1 - self.alpha) * original_text_tokens + self.alpha * attended_image
+        print(f"Final Fused norm: {torch.norm(fused, dim=-1).mean():.4f}")
+        
         return fused
