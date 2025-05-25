@@ -25,6 +25,8 @@ from ldm.models.diffusion.ddpm import CrossAttentionFusion
 from scripts.vcf.pno import instantiate_clip_model_for_pno_trajectory_loss, optimize_prompt_noise_trajectory
 from torchvision import transforms
 import matplotlib.pyplot as plt
+import math
+
 
 # ------ Attention code step 0/4 ------
 # -- Update for visualization of attention maps --
