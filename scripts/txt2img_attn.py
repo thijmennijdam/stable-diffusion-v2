@@ -143,65 +143,61 @@ class AttnStore:
 
 # Simple version of build_heatmaps that works with the debug store
 def build_heatmaps(store, H, W, batch_size=3, sample_idx=0):
-    """
-    Builds attention heatmaps for selected layers.
-    Uses the last set of attention maps (final diffusion step).
-    """
     if not store.store:
         raise ValueError("No attention maps collected!")
 
-    # Get the last N maps (one per hooked layer)
     num_hooks = len(store.hooks)
     last_maps = store.store[-num_hooks:] if len(store.store) >= num_hooks else store.store
-    
-    heatmaps = []
+
+    cond_heatmaps = []
+    uncond_heatmaps = []
     used_names = []
 
     for i, entry in enumerate(last_maps):
         t = entry['attention']
-        
         print(f"Attention shape: {t.shape}, Layer: {entry['layer_name']}, Hook index: {entry['hook_idx']}")
 
         if t.ndim == 3:
-            num_heads = t.shape[0] // batch_size
-            t = t.view(batch_size, num_heads, -1, t.shape[-1])
-            attn_patch = t[sample_idx].mean(0).mean(1)  # → (H, W) for the sample_idx
-            print(f"Using attention patch shape: {attn_patch.shape} for sample index {sample_idx}")
-
+            try:
+                t = t.view(2, batch_size, -1, t.shape[-1])  # [cond/uncond, batch, tokens, dim]
+                cond_patch = t[1, sample_idx].mean(-1)
+                uncond_patch = t[0, sample_idx].mean(-1)
+            except:
+                print("[warn] Cannot split into [2, B, Q, D]")
+                continue
         elif t.ndim == 2:
-            attn_patch = t.mean(1)         # → (Q,)
+            cond_patch = uncond_patch = t.mean(1)
         else:
             print(f"[warn] Unexpected attention shape: {t.shape}")
             continue
 
-        q = attn_patch.numel()
-        grid = int(math.sqrt(q))
-        if grid * grid != q:
-            print(f"[warn] skipping map with Q={q} (not square)")
-            continue
+        for patch, target in [(cond_patch, cond_heatmaps), (uncond_patch, uncond_heatmaps)]:
+            q = patch.numel()
+            grid = int(math.sqrt(q))
+            if grid * grid != q:
+                print(f"[warn] skipping map with Q={q} (not square)")
+                continue
 
-        heat = attn_patch.view(grid, grid).numpy().astype(np.float32)
-        heat = np.nan_to_num(heat, nan=0.0, posinf=0.0, neginf=0.0)
+            heat = patch.view(grid, grid).numpy().astype(np.float32)
+            heat = np.nan_to_num(heat, nan=0.0, posinf=0.0, neginf=0.0)
 
-        # Normalize
-        heat -= heat.min()
-        if heat.max() > 1e-8:
-            heat /= heat.max()
-        else:
-            heat[:] = 0
+            heat -= heat.min()
+            if heat.max() > 1e-8:
+                heat /= heat.max()
+            else:
+                heat[:] = 0
 
-        # Upsample to image size
-        heat = cv2.resize(heat, (W, H), interpolation=cv2.INTER_CUBIC)
-        heatmaps.append(heat)
-        
-        # FIX: Use the layer name from the entry, not from store.layer_names[i]
+            heat = cv2.resize(heat, (W, H), interpolation=cv2.INTER_CUBIC)
+            target.append(heat)
+
         layer_name = store.layer_names[entry['hook_idx']] if entry['hook_idx'] < len(store.layer_names) else f"Layer {entry['hook_idx']}"
         used_names.append(layer_name)
 
-    if not heatmaps:
+    if not cond_heatmaps or not uncond_heatmaps:
         raise ValueError("No valid heatmaps after filtering.")
 
-    return heatmaps, used_names
+    return cond_heatmaps, uncond_heatmaps, used_names
+
 # Usage:
 # store = AttnSt
 
@@ -246,7 +242,7 @@ def overlay_grid(img_pil, heatmaps, titles=None, alpha=0.6, figsize_per_plot=4):
         axes[i + 1].axis("off")
         
         title = titles[i] if titles and i < len(titles) else f"Heatmap {i}"
-        axes[i + 1].set_title(title)
+        axes[i + 1].set_title(title, pad=10)
 
     plt.tight_layout()
     return fig
@@ -753,20 +749,24 @@ def main(opt):
                         
                         # Kleine blokken
 
-                        heatmaps, names = build_heatmaps(attn, opt.H, opt.W, batch_size=opt.n_samples, 
-                                                            sample_idx=sample_idx)
+                        cond_heatmaps, uncond_heatmaps, used_names = build_heatmaps(attn, opt.H, opt.W, batch_size=opt.n_samples, sample_idx=sample_idx)
 
 
                         
                         # check if attention maps are empty
-                        if not heatmaps:
+                        if not cond_heatmaps or not uncond_heatmaps:
                             print(f"No attention maps collected for sample {base_count:05}. Skipping overlay.")
                             continue
                         
                         
-                        fig = overlay_grid(img, heatmaps, titles=names)
-                        fig.savefig(f"{sample_path}/{base_count:05}_attn.png", dpi=300)
-                        plt.close(fig)
+                        fig_cond = overlay_grid(img, cond_heatmaps, titles=used_names)
+                        fig_cond.savefig(f"{sample_path}/{base_count:05}_attn_cond.png", dpi=300)
+                        plt.close(fig_cond)
+
+                        fig_uncond = overlay_grid(img, uncond_heatmaps, titles=used_names)
+                        fig_uncond.savefig(f"{sample_path}/{base_count:05}_attn_uncond.png", dpi=300)
+                        plt.close(fig_uncond)
+
 
 
                         base_count += 1
