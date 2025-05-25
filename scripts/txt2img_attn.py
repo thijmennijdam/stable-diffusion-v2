@@ -885,11 +885,11 @@ def main(opt):
                             continue
                         
                         
-                        fig_cond = overlay_grid(img, cond_heatmaps, titles=used_names)
+                        fig_cond = overlay_grid(img_pil_to_save, cond_heatmaps, titles=used_names)
                         fig_cond.savefig(f"{sample_path}/{base_count:05}_attn_cond.png", dpi=300)
                         plt.close(fig_cond)
 
-                        fig_uncond = overlay_grid(img, uncond_heatmaps, titles=used_names)
+                        fig_uncond = overlay_grid(img_pil_to_save, uncond_heatmaps, titles=used_names)
                         fig_uncond.savefig(f"{sample_path}/{base_count:05}_attn_uncond.png", dpi=300)
                         plt.close(fig_uncond)
                         
