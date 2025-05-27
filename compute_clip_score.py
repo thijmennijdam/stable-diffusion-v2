@@ -46,6 +46,11 @@ def compute_clip_score(image_path, prompt, device):
     print(f"CLIP score between image and prompt \"{prompt}\": {score:.4f}")
     return score
 
+
 if __name__ == "__main__":
     args = parse_args()
     compute_clip_score(args.image_path, args.prompt, args.device)
+
+uv run python compute_fid_score.py \
+  --fusion_type_a alpha_blend \
+  --fusion_type_b concat

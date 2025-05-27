@@ -680,7 +680,7 @@ def main(opt):
     if opt.calculate_clip_score and clip_scores:
         avg_score = sum(clip_scores) / len(clip_scores)
         print(f"Average CLIP score: {avg_score:.4f}")
-        wandb.log({"clip_score_avg": avg_score})
+        wandb.log({"clip_score_avg": avg_score}, step=None)
 
         # Log collected intermediate DDIM images from standard pipeline
         if wandb_img_callback.stored_images:
