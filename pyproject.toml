@@ -26,6 +26,7 @@ dependencies = [
     "wandb",
     "datasets>=3.1.0",
     "scikit-image>=0.19.3",
+    "xformers>=0.0.22",
 ]
 
 [build-system]
