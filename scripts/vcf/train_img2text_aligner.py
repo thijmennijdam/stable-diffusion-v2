@@ -287,13 +287,13 @@ def train_aligner(
     
     # Initial validation loss
     exclude_cls = args.exclude_cls
+    wandb.watch(aligner, log="all")
     
     initial_val_loss = evaluate_loss(val_loader, clip_text_encoder, clip_image_encoder, loss_fn, aligner, device, exclude_cls)
     print(f"Initial Validation Loss: {initial_val_loss:.4f}")
-    wandb.log({"initial_val_loss": initial_val_loss})
+    wandb.log({"val_loss": initial_val_loss})
     
     optimizer = torch.optim.Adam(aligner.parameters(), lr=args.lr)
-    wandb.watch(aligner, log="all")
     os.makedirs(os.path.dirname(save_path), exist_ok=True)
 
     best_val_loss = float("inf")
@@ -341,8 +341,9 @@ def train_aligner(
 
     wandb.log({"best_val_loss": best_val_loss})
     best_model_path_filename = os.path.basename(best_model_path)
-    wandb.log({"best_model": wandb.Artifact(best_model_path_filename, type="model")})
-    wandb.save(best_model_path)
+    artifact = wandb.Artifact(best_model_path_filename, type="model")
+    artifact.add_file(best_model_path)
+    wandb.log_artifact(artifact)
 
     # Load and evaluate best model on test set
     aligner.load_state_dict(torch.load(best_model_path))
@@ -367,8 +368,6 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--epochs", type=int, default=10)
     parser.add_argument("--lr", type=float, default=1e-4)
     parser.add_argument("--device", type=str, default="cuda")
-    parser.add_argument("--wandb_project", type=str, default="text-image-aligner")
-    parser.add_argument("--wandb_entity", type=str, default=None)
     parser.add_argument("--model_path", type=str, default="weights/img2text_aligner/model.pth")
     parser.add_argument("--save_every", type=int, default=5, help="Save model every N epochs")
     parser.add_argument("--resume_from", type=str, default=None, help="Path to a pretrained aligner checkpoint")
@@ -385,10 +384,14 @@ if __name__ == "__main__":
     if not os.getenv("WANDB_API_KEY"):
         raise ValueError("WANDB_API_KEY is not set in the environment.")
     wandb.login(key=os.getenv("WANDB_API_KEY"))
-    wandb.init(project=args.wandb_project, entity=args.wandb_entity, config=vars(args),
-                name=f"aligner-{args.loss}-{args.datasets}-{args.epochs}epochs-{args.batch_size}bs-{args.lr}lr",
-                # tags= ...
-               )
+    project_name = os.getenv("WANDB_PROJECT", "img2text-alignment")
+    entity_name = os.getenv("WANDB_ENTITY", "FoMo-2025")
+
+    datasets_name = "+".join(args.datasets) if len(args.datasets) > 1 else args.datasets[0]
+    wandb.init(project=project_name, 
+               entity=entity_name, 
+               config=vars(args),
+               name=f"aligner-{args.loss}-{datasets_name}-{args.epochs}epochs-{args.batch_size}bs-{args.lr}lr")
 
     loss_function = cosine_similarity_loss if args.loss == "cosine" else info_nce_loss
 

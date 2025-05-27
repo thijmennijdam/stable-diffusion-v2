@@ -19,6 +19,8 @@ from tqdm import tqdm
 from torchvision.utils import make_grid
 from pytorch_lightning.utilities.distributed import rank_zero_only
 from omegaconf import ListConfig
+import math
+import torch.nn.functional as F
 
 from ldm.util import log_txt_as_img, exists, default, ismap, isimage, mean_flat, count_params, instantiate_from_config
 from ldm.modules.ema import LitEma
@@ -27,7 +29,7 @@ from ldm.models.autoencoder import IdentityFirstStage, AutoencoderKL
 from ldm.modules.diffusionmodules.util import make_beta_schedule, extract_into_tensor, noise_like
 from ldm.models.diffusion.ddim import DDIMSampler
 from ldm.modules.encoders.modules import FrozenOpenCLIPImageEmbedder
-from ldm.modules.vcf.aligner import ImageToTextAligner
+from ldm.modules.vcf.aligner import ImageToTextAlignerV1, ImageToTextAlignerV2
 
 __conditioning_keys__ = {'concat': 'c_concat',
                          'crossattn': 'c_crossattn',
@@ -113,7 +115,7 @@ class DDPM(pl.LightningModule):
             self.init_from_ckpt(ckpt_path, ignore_keys=ignore_keys, only_model=load_only_unet)
             if reset_ema:
                 assert self.use_ema
-                print(f"Resetting ema to pure model weights. This is useful when restoring from an ema-only checkpoint.")
+                print("Resetting ema to pure model weights. This is useful when restoring from an ema-only checkpoint.")
                 self.model_ema = LitEma(self.model)
         if reset_num_ema_updates:
             print(" +++++++++++ WARNING: RESETTING NUM_EMA UPDATES TO ZERO +++++++++++ ")
@@ -226,7 +228,7 @@ class DDPM(pl.LightningModule):
                     desc="Fitting old weights to new weights",
                     total=n_params
             ):
-                if not name in sd:
+                if name not in sd:
                     continue
                 old_shape = sd[name].shape
                 new_shape = param.shape
@@ -541,6 +543,11 @@ class LatentDiffusion(DDPM):
                  ref_blend_weight=0.05,  # Add control for text-image blending
                  timestep_cond_start=0.0, 
                  timestep_cond_end=1.0,
+                 ref_first=False,  # Add this parameter,
+                 fusion_type="alpha_blend",  
+                 fusion_token_type="all", # "cls_only", "except_cls", "all"
+                 aligner_version="v1", # Add aligner version
+                 aligner_dropout=0.1,  # Add aligner dropout
                  *args, **kwargs):
         self.force_null_conditioning = force_null_conditioning
         self.num_timesteps_cond = default(num_timesteps_cond, 1)
@@ -580,7 +587,7 @@ class LatentDiffusion(DDPM):
             if reset_ema:
                 assert self.use_ema
                 print(
-                    f"Resetting ema to pure model weights. This is useful when restoring from an ema-only checkpoint.")
+                    "Resetting ema to pure model weights. This is useful when restoring from an ema-only checkpoint.")
                 self.model_ema = LitEma(self.model)
         if reset_num_ema_updates:
             print(" +++++++++++ WARNING: RESETTING NUM_EMA UPDATES TO ZERO +++++++++++ ")
@@ -592,10 +599,14 @@ class LatentDiffusion(DDPM):
         self.ref_blend_weight = ref_blend_weight
         self.timestep_cond_start = timestep_cond_start  
         self.timestep_cond_end = timestep_cond_end    
+        self.ref_first = ref_first  # Add this line
+        self.fusion_type = fusion_type
+        self.fusion_token_type = fusion_token_type
+        self.aligner_version = aligner_version
+        self.aligner_dropout = aligner_dropout
 
-
-        if self.use_ref_img:
-            self.create_ref_img_encoder()
+        # if self.use_ref_img:
+        #     self.create_ref_img_encoder()
 
 
     def create_ref_img_encoder(self):
@@ -611,7 +622,14 @@ class LatentDiffusion(DDPM):
             model_path (str): Path to the .pth file containing the saved model weights.
         """
         print(f"Loading ImageToTextAligner from {model_path}")
-        self.image_to_text_aligner = ImageToTextAligner(output_dim=1024).to(self.device)
+        # Instantiate the correct aligner based on version and dropout
+        if self.aligner_version == "v1":
+            self.image_to_text_aligner = ImageToTextAlignerV1(input_dim=1280, output_dim=1024).to(self.device)
+        elif self.aligner_version == "v2":
+            self.image_to_text_aligner = ImageToTextAlignerV2(input_dim=1280, output_dim=1024, dropout=self.aligner_dropout).to(self.device)
+        else:
+            raise ValueError(f"Unknown aligner version: {self.aligner_version}")
+
         if os.path.isfile(model_path):
             state_dict = torch.load(model_path, map_location=self.device)
             self.image_to_text_aligner.load_state_dict(state_dict)
@@ -907,7 +925,7 @@ class LatentDiffusion(DDPM):
         return out
 
     @torch.no_grad()
-    def decode_first_stage(self, z, predict_cids=False, force_not_quantize=False):
+    def decode_first_stage(self, z, predict_cids=False, force_not_quantize=False, enable_grad=False):
         if predict_cids:
             if z.dim() == 4:
                 z = torch.argmax(z.exp(), dim=1).long()
@@ -1004,157 +1022,12 @@ class LatentDiffusion(DDPM):
         
         return features_hash
     
-    '''Heavily debugged version'''
-    # def apply_model(self, x_noisy, t, cond, return_ids=False, timestep_fraction=None):
-    #     print(f"DEBUG: apply_model received timestep_fraction: {timestep_fraction}")
-    #     print(f"DEBUG: apply_model received t (timesteps): {t}")
-    #     print(f"DEBUG: Initial cond type: {type(cond)}")
-    #     if hasattr(cond, 'shape'):
-    #         print(f"DEBUG: Initial cond shape: {cond.shape}")
-        
-    #     # Store original conditioning for comparison
-    #     original_cond = cond.clone() if isinstance(cond, torch.Tensor) else cond
-        
-    #     # Apply dynamic reference image conditioning based on diffusion timestep
-    #     if (self.use_ref_img and 
-    #         hasattr(self, 'stored_text_cond') and 
-    #         hasattr(self, 'stored_ref_image')):
-            
-    #         # Calculate timestep fraction from the actual diffusion timesteps t
-    #         if isinstance(t, torch.Tensor):
-    #             current_timestep = t[0].item()  # Get scalar value
-    #         else:
-    #             current_timestep = t
-                
-    #         # Convert timestep to fraction (1.0 = start of diffusion, 0.0 = end)
-    #         max_timestep = self.num_timesteps - 1  # Usually 999 for 1000 timesteps
-    #         calculated_timestep_fraction = float(current_timestep) / float(max_timestep)
-            
-    #         print(f"DEBUG: Current diffusion timestep: {current_timestep}")
-    #         print(f"DEBUG: Max timestep: {max_timestep}")
-    #         print(f"DEBUG: Calculated timestep fraction: {calculated_timestep_fraction:.3f}")
-    #         print(f"DEBUG: Conditioning range: [{self.timestep_cond_start}, {self.timestep_cond_end}]")
-            
-    #         # Handle the case where start == end == 0.0 (never apply reference conditioning)
-    #         if self.timestep_cond_start == 0.0 and self.timestep_cond_end == 0.0:
-    #             apply_ref_img = False
-    #             print(f"DEBUG: Special case: never apply reference conditioning")
-    #         elif self.timestep_cond_start > self.timestep_cond_end:
-    #             apply_ref_img = False
-    #             print(f"DEBUG: Invalid range: never apply reference conditioning")
-    #         else:
-    #             # Normal range check
-    #             apply_ref_img = (self.timestep_cond_start <= calculated_timestep_fraction <= self.timestep_cond_end)
-            
-    #         print(f"DEBUG: Apply reference conditioning: {apply_ref_img}")
-            
-    #         if apply_ref_img:
-    #             # DEBUG: Check stored reference image before processing
-    #             stored_hash = self.debug_reference_image(self.stored_ref_image, "STORED_before_processing")
-                
-    #             # Extract reference image features
-    #             ref_image = self.stored_ref_image.to(self.device)
-                
-    #             # DEBUG: Check reference image after moving to device
-    #             device_hash = self.debug_reference_image(ref_image, "AFTER_to_device")
-                
-    #             # CLIP feature extraction
-    #             print(f"DEBUG: Calling CLIP model...")
-    #             image_features = self.clip_model(ref_image)
-                
-    #             # DEBUG: Check CLIP features
-    #             clip_hash = self.debug_clip_features(image_features, "RAW_CLIP_output")
-                
-    #             # Image-to-text alignment
-    #             print(f"DEBUG: Calling image-to-text aligner...")
-    #             print(f"DEBUG: Aligner input shape: {image_features.shape}")
-    #             image_features = self.image_to_text_aligner(image_features)
-                
-    #             # DEBUG: Check aligner features  
-    #             aligner_hash = self.debug_clip_features(image_features, "AFTER_aligner")
-                
-    #             # Handle the aligner output
-    #             original_aligner_shape = image_features.shape
-    #             if image_features.dim() == 3:  # [B, N_patches, D]
-    #                 image_features = image_features.mean(dim=(0, 1))  # [D]
-    #             elif image_features.dim() == 2:  # [N_patches, D] or [B, D]
-    #                 if image_features.shape[0] == 1:  # [1, D] case
-    #                     image_features = image_features.squeeze(0)  # [D]
-    #                 else:  # [N_patches, D] case
-    #                     image_features = image_features.mean(dim=0)  # [D]
-                
-    #             print(f"DEBUG: Aligner output shape: {original_aligner_shape} -> Final shape: {image_features.shape}")
-                
-    #             # DEBUG: Check final image features
-    #             final_hash = self.debug_clip_features(image_features, "FINAL_image_features")
-                
-    #             print(f"DEBUG: Image processing hashes - stored:{stored_hash}, device:{device_hash}, clip:{clip_hash}, aligner:{aligner_hash}, final:{final_hash}")
-                
-    #             # Debug the conditioning influence
-    #             relative_change = self.debug_conditioning_influence(
-    #                 self.stored_text_cond, image_features, self.ref_blend_weight
-    #             )
-                
-    #             # Apply blending using broadcasting
-    #             alpha = self.ref_blend_weight
-    #             blended_text_cond = (1 - alpha) * self.stored_text_cond + alpha * image_features
-    #             print(f"DEBUG: Blended conditioning shape: {blended_text_cond.shape}")
-    #             print(f"DEBUG: Blend weight (alpha): {alpha}")
-                
-    #             # Handle CFG by checking if cond has doubled batch size
-    #             if isinstance(cond, torch.Tensor):
-    #                 print(f"DEBUG: cond is tensor, replacing directly")
-    #                 if cond.shape[0] == self.stored_text_cond.shape[0] * 2:
-    #                     print(f"DEBUG: CFG detected, repeating blended conditioning")
-    #                     cond = blended_text_cond.repeat(2, 1, 1)
-    #                 else:
-    #                     print(f"DEBUG: Normal case, using blended conditioning as-is")
-    #                     cond = blended_text_cond
-    #             else:
-    #                 print(f"DEBUG: cond is not tensor, type: {type(cond)}")
-                        
-    #         else:
-    #             # Use pure text conditioning - don't modify the original conditioning
-    #             print(f"DEBUG: Using pure text conditioning (no modification)")
-    #     else:
-    #         print(f"DEBUG: Reference image conditioning not available or disabled")
-        
-    #     print(f"DEBUG: Final cond type before dict conversion: {type(cond)}")
-    #     if hasattr(cond, 'shape'):
-    #         print(f"DEBUG: Final cond shape before dict conversion: {cond.shape}")
-        
-    #     # Convert conditioning to dict format expected by UNet
-    #     if isinstance(cond, dict):
-    #         print(f"DEBUG: cond is dict, passing through")
-    #         pass
-    #     else:
-    #         if not isinstance(cond, list):
-    #             print(f"DEBUG: Converting cond to list")
-    #             cond = [cond]
-    #         key = 'c_concat' if self.model.conditioning_key == 'concat' else 'c_crossattn'
-    #         print(f"DEBUG: Creating dict with key: {key}")
-    #         cond = {key: cond}
 
-    #     print(f"DEBUG: Final cond dict keys: {list(cond.keys()) if isinstance(cond, dict) else 'not dict'}")
-
-    #     # Call the UNet without timestep_fraction since it doesn't support it
-    #     x_recon = self.model(x_noisy, t, **cond)
-        
-    #     if isinstance(x_recon, tuple) and not return_ids:
-    #         return x_recon[0]
-    #     else:
-    #         return x_recon
     '''Feature amplification version'''
     def apply_model(self, x_noisy, t, cond, return_ids=False, timestep_fraction=None):
         print(f"DEBUG: apply_model received timestep_fraction: {timestep_fraction}")
         print(f"DEBUG: apply_model received t (timesteps): {t}")
-        print(f"DEBUG: Initial cond type: {type(cond)}")
-        if hasattr(cond, 'shape'):
-            print(f"DEBUG: Initial cond shape: {cond.shape}")
-        
-        # Store original conditioning for comparison
-        original_cond = cond.clone() if isinstance(cond, torch.Tensor) else cond
-        
+                
         # Apply dynamic reference image conditioning based on diffusion timestep
         if (self.use_ref_img and 
             hasattr(self, 'stored_text_cond') and 
@@ -1189,64 +1062,88 @@ class LatentDiffusion(DDPM):
             print(f"DEBUG: Apply reference conditioning: {apply_ref_img}")
             
             if apply_ref_img:
-                # Extract reference image features
                 ref_image = self.stored_ref_image.to(self.device)
-                image_features = self.clip_model(ref_image)
-                image_features = self.image_to_text_aligner(image_features)
                 
-                # Handle the aligner output
-                if image_features.dim() == 3:  # [B, N_patches, D]
-                    image_features = image_features.mean(dim=(0, 1))  # [D]
-                elif image_features.dim() == 2:  # [N_patches, D] or [B, D]
-                    if image_features.shape[0] == 1:  # [1, D] case
-                        image_features = image_features.squeeze(0)  # [D]
-                    else:  # [N_patches, D] case
-                        image_features = image_features.mean(dim=0)  # [D]
-                
-                print(f"DEBUG: Original image features norm: {torch.norm(image_features).item():.6f}")
-                
-                # EXPERIMENTAL: Amplify image features to match text conditioning magnitude
-                text_norm = torch.norm(self.stored_text_cond).item()
-                image_norm = torch.norm(image_features).item()
-                
-                # Calculate amplification factor to make image features same magnitude as text
-                amplification_factor = text_norm / image_norm if image_norm > 0 else 1.0
-                
-                # Clamp amplification to reasonable range
-                amplification_factor = min(amplification_factor, 1000.0)  # Max 1000x amplification
-                
-                amplified_image_features = image_features * amplification_factor
-                print(f"DEBUG: Amplification factor: {amplification_factor:.2f}")
-                print(f"DEBUG: Amplified image features norm: {torch.norm(amplified_image_features).item():.6f}")
-                print(f"DEBUG: Text conditioning norm: {text_norm:.6f}")
-                
-                # Use amplified features for blending
-                alpha = self.ref_blend_weight
-                blended_text_cond = (1 - alpha) * self.stored_text_cond + alpha * amplified_image_features
-                
-                # Debug the new conditioning influence
-                diff_from_original = torch.norm(blended_text_cond - self.stored_text_cond).item()
-                relative_change = diff_from_original / text_norm if text_norm > 0 else 0
-                
-                print(f"CONDITIONING DEBUG (AMPLIFIED):")
-                print(f"  Blended conditioning norm: {torch.norm(blended_text_cond).item():.6f}")
-                print(f"  Absolute change: {diff_from_original:.6f}")
-                print(f"  Relative change: {relative_change:.3%}")
-                print(f"  New Image/Text ratio: {torch.norm(amplified_image_features).item()/text_norm:.6f}")
-                
-                print(f"DEBUG: Blended conditioning shape: {blended_text_cond.shape}")
-                print(f"DEBUG: Blend weight (alpha): {alpha}")
-                
-                # Handle CFG by checking if cond has doubled batch size
-                if isinstance(cond, torch.Tensor):
-                    print(f"DEBUG: cond is tensor, replacing directly")
-                    if cond.shape[0] == self.stored_text_cond.shape[0] * 2:
-                        print(f"DEBUG: CFG detected, repeating blended conditioning")
-                        cond = blended_text_cond.repeat(2, 1, 1)
-                    else:
-                        print(f"DEBUG: Normal case, using blended conditioning as-is")
-                        cond = blended_text_cond
+                # Configure exclude_cls based on fusion_token_type
+                if self.fusion_token_type == "cls_only":
+                    # exclude_cls = False  # Get all tokens including CLS
+                    self.clip_model.exclude_cls = False
+                elif self.fusion_token_type == "except_cls":
+                    # exclude_cls = True   # Exclude CLS token
+                    self.clip_model.exclude_cls = True
+                elif self.fusion_token_type == "all":
+                    # exclude_cls = False  # Get all tokens including CLS
+                    self.clip_model.exclude_cls = False
                 else:
+                    raise ValueError(f"Invalid fusion_token_type: {self.fusion_token_type}. "
+                                    f"Must be one of: 'cls_only', 'except_cls', 'all'")
+
+                image_features = self.clip_model(ref_image)
+                image_features = self.image_to_text_aligner(image_features).squeeze(0)  # [N_tokens, D]
+                
+                if self.fusion_type == "alpha_blend":
+                    print(f"Image features shape: {image_features.shape}")
+                    print(f"Text features shape: {self.stored_text_cond.shape}")
+                    # image_features = image_features.mean(dim=0) # [D]
+                    '''Potentially we need to keep the above instead of the if-elif-else statements below'''
+                    # Handle the aligner output
+                    if image_features.dim() == 3:  # [B, N_patches, D]
+                        image_features = image_features.mean(dim=(0, 1))  # [D]
+                    elif image_features.dim() == 2:  # [N_patches, D] or [B, D]
+                        if image_features.shape[0] == 1:  # [1, D] case
+                            image_features = image_features.squeeze(0)  # [D]
+                        else:  # [N_patches, D] case
+                            image_features = image_features.mean(dim=0)  # [D]
+                    print(f"Image features shape: {image_features.shape}")
+                    print(f"Text features shape: {self.stored_text_cond.shape}")
+                    
+                    print(f"DEBUG: Original image features norm: {torch.norm(image_features).item():.6f}")
+                    # EXPERIMENTAL: Amplify image features to match text conditioning magnitude
+                    text_norm = torch.norm(self.stored_text_cond).item()
+                    image_norm = torch.norm(image_features).item()
+                    # Calculate amplification factor to make image features same magnitude as text
+                    amplification_factor = text_norm / image_norm if image_norm > 0 else 1.0
+                    # Clamp amplification to reasonable range
+                    amplification_factor = min(amplification_factor, 1000.0)  # Max 1000x amplification
+                    amplified_image_features = image_features * amplification_factor
+                    print(f"DEBUG: Amplification factor: {amplification_factor:.2f}")
+                    print(f"DEBUG: Amplified image features norm: {torch.norm(amplified_image_features).item():.6f}")
+                    print(f"DEBUG: Text conditioning norm: {text_norm:.6f}")
+                    # Use amplified features for blending
+                    alpha = self.ref_blend_weight
+                    blended_text_cond = (1 - alpha) * self.stored_text_cond + alpha * amplified_image_features
+                    # Debug the new conditioning influence
+                    diff_from_original = torch.norm(blended_text_cond - self.stored_text_cond).item()
+                    relative_change = diff_from_original / text_norm if text_norm > 0 else 0
+                    print(f"CONDITIONING DEBUG (AMPLIFIED):")
+                    print(f"  Blended conditioning norm: {torch.norm(blended_text_cond).item():.6f}")
+                    print(f"  Absolute change: {diff_from_original:.6f}")
+                    print(f"  Relative change: {relative_change:.3%}")
+                    print(f"  New Image/Text ratio: {torch.norm(amplified_image_features).item()/text_norm:.6f}")
+                    print(f"DEBUG: Blended conditioning shape: {blended_text_cond.shape}")
+                    print(f"DEBUG: Blend weight (alpha): {alpha}")
+                        
+                # Apply additional token filtering if needed
+                if self.fusion_token_type == "cls_only":
+                    # Use only the first token (CLS token)
+                    image_features = image_features[:1, :]  # [1, D]
+                # For "except_cls" and "all", no additional filtering needed as exclude_cls handles it
+                
+                image_token = image_features.unsqueeze(0)  # [1, N_selected, D]
+                # Replicate image token to match batch size
+                image_token = image_token.repeat(self.stored_text_cond.shape[0], 1, 1)  # [B, N_selected, D]
+                
+                if self.fusion_type == "cross_attention":
+                    # Use cross-attention fusion instead of concatenation
+                    blended_text_cond = self.cross_attention_fusion(self.stored_text_cond, image_token)  # [B, 77, D] -> [B, 77, D]
+                elif self.fusion_type == "concat":
+                    # Original concatenation approach
+                    if self.ref_first:
+                        blended_text_cond = torch.cat([image_token, self.stored_text_cond], dim=1)  # [B, N_selected+77, D]
+                    else:
+                        blended_text_cond = torch.cat([self.stored_text_cond, image_token], dim=1)  # [B, 77+N_selected, D]
+                
+                if apply_ref_img == False:
                     print(f"DEBUG: cond is not tensor, type: {type(cond)}")
                         
             else:
@@ -1255,10 +1152,16 @@ class LatentDiffusion(DDPM):
         else:
             print(f"DEBUG: Reference image conditioning not available or disabled")
         
-        print(f"DEBUG: Final cond type before dict conversion: {type(cond)}")
-        if hasattr(cond, 'shape'):
-            print(f"DEBUG: Final cond shape before dict conversion: {cond.shape}")
-        
+         # Handle CFG by checking if cond has doubled batch size
+        if isinstance(cond, torch.Tensor):
+            print(f"DEBUG: cond is tensor, replacing directly")
+            if cond.shape[0] == self.stored_text_cond.shape[0] * 2:
+                print(f"DEBUG: CFG detected, repeating blended conditioning")
+                cond = blended_text_cond.repeat(2, 1, 1)
+            else:
+                print(f"DEBUG: Normal case, using blended conditioning as-is")
+                cond = blended_text_cond
+                
         # Convert conditioning to dict format expected by UNet
         if isinstance(cond, dict):
             print(f"DEBUG: cond is dict, passing through")
@@ -1567,6 +1470,7 @@ class LatentDiffusion(DDPM):
                 c[i] = repeat(c[i], '1 ... -> b ...', b=batch_size).to(self.device)
         else:
             c = repeat(c, '1 ... -> b ...', b=batch_size).to(self.device)
+        
         return c
 
     @torch.no_grad()
@@ -2310,7 +2214,7 @@ class ImageEmbeddingConditionedLatentDiffusion(LatentDiffusion):
 
         uc_ = {"c_crossattn": [uc], "c_adm": c["c_adm"]}
         ema_scope = self.ema_scope if kwargs.get('use_ema_scope', True) else nullcontext
-        with ema_scope(f"Sampling"):
+        with ema_scope("Sampling"):
             samples_cfg, _ = self.sample_log(cond=c, batch_size=N, ddim=True,
                                              ddim_steps=kwargs.get('ddim_steps', 50), eta=kwargs.get('ddim_eta', 0.),
                                              unconditional_guidance_scale=unconditional_guidance_scale,
@@ -2318,3 +2222,53 @@ class ImageEmbeddingConditionedLatentDiffusion(LatentDiffusion):
             x_samples_cfg = self.decode_first_stage(samples_cfg)
             log[f"samplescfg_scale_{unconditional_guidance_scale:.2f}"] = x_samples_cfg
         return log
+
+class CrossAttentionFusion(nn.Module):
+    def __init__(self, dim=1024, alpha=0.1):
+        super().__init__()
+        self.scale = math.sqrt(dim) # Scale for attention scores, assumes Q_norm @ K_norm.T
+        self.alpha = nn.Parameter(torch.tensor(alpha))
+
+    def forward(self, text_tokens, image_tokens):
+        # text_tokens: [B, 77, D] - Current norm ~33
+        # image_tokens: [B, N_img, D] - Current norm ~3.5
+
+        original_text_tokens = text_tokens.clone() # Preserve for final fusion, norm ~33
+
+        # --- 1. Calculate target magnitude from text_tokens ---
+        # Using mean norm across batch and sequence for a single scalar target
+        with torch.no_grad(): # Avoid tracking gradients for this calculation
+            text_magnitude_target = torch.norm(text_tokens, p=2, dim=-1, keepdim=True).mean()
+        
+        print(f"Alpha: {self.alpha.item():.4f}")
+        print(f"Original Text norm: {torch.norm(text_tokens, dim=-1).mean():.4f}")
+        print(f"Original Image norm: {torch.norm(image_tokens, dim=-1).mean():.4f}")
+        print(f"Target magnitude for scaling: {text_magnitude_target.item():.4f}")
+
+        # --- 2. Scale image_tokens to match target_magnitude ---
+        # These will be the "values" in attention
+        image_tokens_scaled_to_text_norm = F.normalize(image_tokens, p=2, dim=-1) * text_magnitude_target
+        print(f"Image tokens scaled to text norm, new norm: {torch.norm(image_tokens_scaled_to_text_norm, dim=-1).mean():.4f}")
+
+        # --- 3. Normalize tokens for calculating attention scores (Q and K) ---
+        # This ensures attention scores are based on angular similarity
+        text_tokens_for_attn_scores = F.normalize(original_text_tokens, p=2, dim=-1) # Query, norm ~1
+        image_tokens_for_attn_scores = F.normalize(image_tokens_scaled_to_text_norm, p=2, dim=-1) # Key, norm ~1
+        
+        # --- 4. Calculate Attention ---
+        # Q_norm @ K_norm.T ensures scores are in a reasonable range for softmax
+        attn_scores = torch.matmul(text_tokens_for_attn_scores, image_tokens_for_attn_scores.transpose(-2, -1))
+        attn_scores = attn_scores / self.scale # self.scale is appropriate here
+        attn_weights = F.softmax(attn_scores, dim=-1)
+
+        # --- 5. Attend to the high-magnitude scaled image tokens (Values) ---
+        # attended_image will now have a norm close to text_magnitude_target (~33)
+        attended_image = torch.matmul(attn_weights, image_tokens_scaled_to_text_norm)
+        print(f"Attended image (after attention with scaled values), norm: {torch.norm(attended_image, dim=-1).mean():.4f}")
+
+        # --- 6. Fusion ---
+        # Both original_text_tokens and attended_image now have similar magnitudes (~33)
+        fused = (1 - self.alpha) * original_text_tokens + self.alpha * attended_image
+        print(f"Final Fused norm: {torch.norm(fused, dim=-1).mean():.4f}")
+        
+        return fused
