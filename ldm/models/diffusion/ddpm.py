@@ -1024,8 +1024,7 @@ class LatentDiffusion(DDPM):
     
 
     '''Feature amplification version'''
-    def apply_model(self, x_noisy, t, cond, return_ids=False, timestep_fraction=None):
-        print(f"DEBUG: apply_model received timestep_fraction: {timestep_fraction}")
+    def apply_model(self, x_noisy, t, cond, return_ids=False):
         print(f"DEBUG: apply_model received t (timesteps): {t}")
                 
         # Apply dynamic reference image conditioning based on diffusion timestep
