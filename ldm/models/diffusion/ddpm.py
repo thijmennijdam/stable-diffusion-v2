@@ -718,8 +718,6 @@ class LatentDiffusion(DDPM):
         return self.scale_factor * z
 
     def get_learned_conditioning(self, c, ref_image=None):
-        print(f"DEBUG: get_learned_conditioning input c type: {type(c)}")
-
         # Get the base text conditioning
         if self.cond_stage_forward is None:
             if hasattr(self.cond_stage_model, 'encode') and callable(self.cond_stage_model.encode):
@@ -735,18 +733,7 @@ class LatentDiffusion(DDPM):
         # Store original text conditioning and reference image for dynamic use during diffusion
         if self.use_ref_img and ref_image is not None:
             self.stored_text_cond = text_cond.clone()  # Store original
-            # DEBUG: Check the input reference image
-            input_hash = self.debug_reference_image(ref_image, "INPUT_TO_get_learned_conditioning")
-        
             self.stored_ref_image = ref_image.clone()  # Store reference image
-            # DEBUG: Check the stored reference image
-            stored_hash = self.debug_reference_image(self.stored_ref_image, "STORED_in_get_learned_conditioning")
-        
-            print(f"DEBUG: Stored text_cond shape: {self.stored_text_cond.shape}")
-            print(f"DEBUG: Stored ref_image shape: {self.stored_ref_image.shape}")
-            print(f"DEBUG: Input and stored image hashes match: {input_hash == stored_hash}")
-            print(f"DEBUG: Dynamic blending will be applied during diffusion steps")
-        
             # For now, return text conditioning without blending
             # The blending will happen dynamically during diffusion steps
             return text_cond
@@ -955,78 +942,8 @@ class LatentDiffusion(DDPM):
                 c = self.q_sample(x_start=c, t=tc, noise=torch.randn_like(c.float()))
         return self.p_losses(x, c, t, *args, **kwargs)
 
-    def debug_conditioning_influence(self, text_cond, image_features, blend_weight):
-            """
-            Debug helper to understand the influence of image features
-            """
-            # Calculate the relative magnitudes
-            text_norm = torch.norm(text_cond).item()
-            image_norm = torch.norm(image_features).item()
-            
-            # Calculate blended result
-            blended = (1 - blend_weight) * text_cond + blend_weight * image_features
-            blended_norm = torch.norm(blended).item()
-            
-            # Calculate how much the image features change the text conditioning
-            diff_from_text = torch.norm(blended - text_cond).item()
-            relative_change = diff_from_text / text_norm if text_norm > 0 else 0
-            
-            print(f"CONDITIONING DEBUG:")
-            print(f"  Text conditioning norm: {text_norm:.6f}")
-            print(f"  Image features norm: {image_norm:.6f}")
-            print(f"  Blended conditioning norm: {blended_norm:.6f}")
-            print(f"  Absolute change: {diff_from_text:.6f}")
-            print(f"  Relative change: {relative_change:.3%}")
-            print(f"  Image/Text ratio: {image_norm/text_norm:.6f}")
-            
-            if relative_change < 0.01:
-                print(f"  ⚠️  WARNING: Very small relative change - increase blend_weight or check image features")
-            elif relative_change < 0.05:
-                print(f"  ⚠️  CAUTION: Small relative change - might not be very visible")
-            else:
-                print(f"  ✅ Good: Significant conditioning change")
-            
-            return relative_change
-        
-    def debug_reference_image(self, ref_image, step_name=""):
-        """Debug the reference image at different pipeline stages"""
-        if ref_image is None:
-            print(f"DEBUG {step_name}: ref_image is None!")
-            return
-            
-        print(f"DEBUG {step_name}: ref_image shape: {ref_image.shape}")
-        print(f"DEBUG {step_name}: ref_image dtype: {ref_image.dtype}")
-        print(f"DEBUG {step_name}: ref_image device: {ref_image.device}")
-        print(f"DEBUG {step_name}: ref_image min: {ref_image.min().item():.6f}")
-        print(f"DEBUG {step_name}: ref_image max: {ref_image.max().item():.6f}")
-        print(f"DEBUG {step_name}: ref_image mean: {ref_image.mean().item():.6f}")
-        print(f"DEBUG {step_name}: ref_image std: {ref_image.std().item():.6f}")
-        
-        # Calculate a simple hash of the image to detect if it's the same
-        image_hash = hash(ref_image.cpu().numpy().tobytes())
-        print(f"DEBUG {step_name}: ref_image hash: {image_hash}")
-        
-        return image_hash
-
-    def debug_clip_features(self, clip_features, step_name=""):
-        """Debug CLIP features"""
-        print(f"DEBUG {step_name}: CLIP features shape: {clip_features.shape}")
-        print(f"DEBUG {step_name}: CLIP features min: {clip_features.min().item():.6f}")
-        print(f"DEBUG {step_name}: CLIP features max: {clip_features.max().item():.6f}")
-        print(f"DEBUG {step_name}: CLIP features mean: {clip_features.mean().item():.6f}")
-        print(f"DEBUG {step_name}: CLIP features std: {clip_features.std().item():.6f}")
-        
-        # Calculate hash to detect if features are identical
-        features_hash = hash(clip_features.cpu().numpy().tobytes())
-        print(f"DEBUG {step_name}: CLIP features hash: {features_hash}")
-        
-        return features_hash
-    
-
     '''Feature amplification version'''
     def apply_model(self, x_noisy, t, cond, return_ids=False):
-        print(f"DEBUG: apply_model received t (timesteps): {t}")
-                
         # Apply dynamic reference image conditioning based on diffusion timestep
         if (self.use_ref_img and 
             hasattr(self, 'stored_text_cond') and 
@@ -1042,23 +959,14 @@ class LatentDiffusion(DDPM):
             max_timestep = self.num_timesteps - 1  # Usually 999 for 1000 timesteps
             calculated_timestep_fraction = float(current_timestep) / float(max_timestep)
             
-            print(f"DEBUG: Current diffusion timestep: {current_timestep}")
-            print(f"DEBUG: Max timestep: {max_timestep}")
-            print(f"DEBUG: Calculated timestep fraction: {calculated_timestep_fraction:.3f}")
-            print(f"DEBUG: Conditioning range: [{self.timestep_cond_start}, {self.timestep_cond_end}]")
-            
             # Handle the case where start == end == 0.0 (never apply reference conditioning)
             if self.timestep_cond_start == 0.0 and self.timestep_cond_end == 0.0:
                 apply_ref_img = False
-                print(f"DEBUG: Special case: never apply reference conditioning")
             elif self.timestep_cond_start > self.timestep_cond_end:
                 apply_ref_img = False
-                print(f"DEBUG: Invalid range: never apply reference conditioning")
             else:
                 # Normal range check
                 apply_ref_img = (self.timestep_cond_start <= calculated_timestep_fraction <= self.timestep_cond_end)
-            
-            print(f"DEBUG: Apply reference conditioning: {apply_ref_img}")
             
             if apply_ref_img:
                 ref_image = self.stored_ref_image.to(self.device)
@@ -1093,10 +1001,7 @@ class LatentDiffusion(DDPM):
                             image_features = image_features.squeeze(0)  # [D]
                         else:  # [N_patches, D] case
                             image_features = image_features.mean(dim=0)  # [D]
-                    print(f"Image features shape: {image_features.shape}")
-                    print(f"Text features shape: {self.stored_text_cond.shape}")
                     
-                    print(f"DEBUG: Original image features norm: {torch.norm(image_features).item():.6f}")
                     # EXPERIMENTAL: Amplify image features to match text conditioning magnitude
                     text_norm = torch.norm(self.stored_text_cond).item()
                     image_norm = torch.norm(image_features).item()
@@ -1105,22 +1010,12 @@ class LatentDiffusion(DDPM):
                     # Clamp amplification to reasonable range
                     amplification_factor = min(amplification_factor, 1000.0)  # Max 1000x amplification
                     amplified_image_features = image_features * amplification_factor
-                    print(f"DEBUG: Amplification factor: {amplification_factor:.2f}")
-                    print(f"DEBUG: Amplified image features norm: {torch.norm(amplified_image_features).item():.6f}")
-                    print(f"DEBUG: Text conditioning norm: {text_norm:.6f}")
                     # Use amplified features for blending
                     alpha = self.ref_blend_weight
                     blended_text_cond = (1 - alpha) * self.stored_text_cond + alpha * amplified_image_features
                     # Debug the new conditioning influence
                     diff_from_original = torch.norm(blended_text_cond - self.stored_text_cond).item()
                     relative_change = diff_from_original / text_norm if text_norm > 0 else 0
-                    print(f"CONDITIONING DEBUG (AMPLIFIED):")
-                    print(f"  Blended conditioning norm: {torch.norm(blended_text_cond).item():.6f}")
-                    print(f"  Absolute change: {diff_from_original:.6f}")
-                    print(f"  Relative change: {relative_change:.3%}")
-                    print(f"  New Image/Text ratio: {torch.norm(amplified_image_features).item()/text_norm:.6f}")
-                    print(f"DEBUG: Blended conditioning shape: {blended_text_cond.shape}")
-                    print(f"DEBUG: Blend weight (alpha): {alpha}")
                         
                 # Apply additional token filtering if needed
                 if self.fusion_token_type == "cls_only":
@@ -1142,38 +1037,21 @@ class LatentDiffusion(DDPM):
                     else:
                         blended_text_cond = torch.cat([self.stored_text_cond, image_token], dim=1)  # [B, 77+N_selected, D]
                 
-                if apply_ref_img == False:
-                    print(f"DEBUG: cond is not tensor, type: {type(cond)}")
-                        
-            else:
-                # Use pure text conditioning - don't modify the original conditioning
-                print(f"DEBUG: Using pure text conditioning (no modification)")
-        else:
-            print(f"DEBUG: Reference image conditioning not available or disabled")
-        
          # Handle CFG by checking if cond has doubled batch size
         if isinstance(cond, torch.Tensor):
-            print(f"DEBUG: cond is tensor, replacing directly")
             if cond.shape[0] == self.stored_text_cond.shape[0] * 2:
-                print(f"DEBUG: CFG detected, repeating blended conditioning")
                 cond = blended_text_cond.repeat(2, 1, 1)
             else:
-                print(f"DEBUG: Normal case, using blended conditioning as-is")
                 cond = blended_text_cond
                 
         # Convert conditioning to dict format expected by UNet
         if isinstance(cond, dict):
-            print(f"DEBUG: cond is dict, passing through")
             pass
         else:
             if not isinstance(cond, list):
-                print(f"DEBUG: Converting cond to list")
                 cond = [cond]
             key = 'c_concat' if self.model.conditioning_key == 'concat' else 'c_crossattn'
-            print(f"DEBUG: Creating dict with key: {key}")
             cond = {key: cond}
-
-        print(f"DEBUG: Final cond dict keys: {list(cond.keys()) if isinstance(cond, dict) else 'not dict'}")
 
         # Call the UNet without timestep_fraction since it doesn't support it
         x_recon = self.model(x_noisy, t, **cond)
@@ -1187,10 +1065,8 @@ class LatentDiffusion(DDPM):
         """Force clear any cached reference images"""
         if hasattr(self, 'stored_ref_image'):
             del self.stored_ref_image
-            print("DEBUG: Cleared cached reference image")
         if hasattr(self, 'stored_text_cond'):
             del self.stored_text_cond  
-            print("DEBUG: Cleared cached text conditioning")
 
     def _predict_eps_from_xstart(self, x_t, t, pred_xstart):
         return (extract_into_tensor(self.sqrt_recip_alphas_cumprod, t, x_t.shape) * x_t - pred_xstart) / \
@@ -1665,7 +1541,6 @@ class DiffusionWrapper(pl.LightningModule):
         assert self.conditioning_key in [None, 'concat', 'crossattn', 'hybrid', 'adm', 'hybrid-adm', 'crossattn-adm']
 
     def forward(self, x, t, c_concat: list = None, c_crossattn: list = None, c_adm=None, timestep_fraction=None):
-        print(f"DEBUG: DiffusionWrapper.forward received timestep_fraction: {timestep_fraction}")
         if self.conditioning_key is None:
             out = self.diffusion_model(x, t, timestep_fraction=timestep_fraction)
         elif self.conditioning_key == 'concat':

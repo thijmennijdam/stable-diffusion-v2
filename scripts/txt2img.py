@@ -328,8 +328,6 @@ def put_watermark(img, wm_encoder=None):
     return img
 
 def main(opt):
-    print(f"DEBUG: Command line args: timestep_cond_start={opt.timestep_cond_start}, timestep_cond_end={opt.timestep_cond_end}, ref_img={opt.ref_img}, ref_blend_weight={opt.ref_blend_weight}")
-
     seed_everything(opt.seed)
     # Set project and entity name from environment variables 
     opt.wandb_project = os.getenv("WANDB_PROJECT", "stable-diffusion-v2")
@@ -415,29 +413,10 @@ def main(opt):
     if opt.fixed_code:
         start_code = torch.randn([opt.n_samples, opt.C, opt.H // opt.f, opt.W // opt.f], device=device)
 
-    # if opt.ref_img:
-    #     if os.path.exists(opt.ref_img):
-    #         ref_image = Image.open(opt.ref_img).convert("RGB")
-    #         ref_image = transforms.ToTensor()(ref_image).to(device).unsqueeze(0) 
-    #         # scale to -1 to 1
-    #         ref_image = (ref_image - 0.5) * 2    
-    #     else:
-    #         print(f"Warning: Reference image not found at {opt.ref_img}. Skipping.")
-    # else:
-    #     ref_image = None
-    
     if opt.ref_img:
         if os.path.exists(opt.ref_img):
-            print(f"DEBUG: Loading reference image from: {opt.ref_img}")
             ref_image = Image.open(opt.ref_img).convert("RGB")
-            print(f"DEBUG: Loaded PIL image size: {ref_image.size}")
-            
             ref_image = transforms.ToTensor()(ref_image).to(device).unsqueeze(0) 
-            print(f"DEBUG: After ToTensor() and unsqueeze: {ref_image.shape}")
-            print(f"DEBUG: Before scaling - min: {ref_image.min().item():.6f}, max: {ref_image.max().item():.6f}")
-            
-            # scale to -1 to 1
-            # ref_image = (ref_image - 0.5) * 2           
         else:
             print(f"Warning: Reference image {opt.ref_img} not found.")
             if opt.use_pno_trajectory: raise ValueError("PNO trajectory requires a valid --ref_img.")
