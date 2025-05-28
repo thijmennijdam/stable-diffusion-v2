@@ -25,6 +25,8 @@ from ldm.models.diffusion.ddpm import CrossAttentionFusion
 from scripts.vcf.pno import instantiate_clip_model_for_pno_trajectory_loss, optimize_prompt_noise_trajectory
 from torchvision import transforms
 
+import json
+
 load_dotenv()
 
 def str2bool(v):
@@ -233,6 +235,11 @@ def parse_args():
         default=0.1,
         help="Blend weight for reference image. 1.0 corresponds to full destruction of information in init image. Used to balance the influence of the reference image and the prompt.",
     )
+    parser.add_argument(
+    "--calculate_clip_score",
+    action='store_true',
+    help="If set, calculates CLIP similarity score between prompt and generated image"
+    )
     # PNO Trajectory specific arguments
     pno_group = parser.add_argument_group('Prompt-Noise Trajectory Optimization (PNO Trajectory)')
     pno_group.add_argument("--use_pno_trajectory", action='store_true', help="Enable PNO trajectory optimization.")
@@ -384,6 +391,10 @@ def main(opt):
     with open(os.path.join(outpath, "prompt.txt"), "w") as f:
         f.write(opt.prompt)
 
+    # Save all arguments to config.json
+    with open(os.path.join(outpath, "config.json"), "w") as f:
+        json.dump(vars(opt), f, indent=2)
+        
     print("Creating invisible watermark encoder (see https://github.com/ShieldMnt/invisible-watermark)...")
     wm = "SDV2"
     wm_encoder = WatermarkEncoder()
@@ -526,6 +537,9 @@ def main(opt):
         config=vars(opt), # add all the configs in the wandb run
     )
 
+    if opt.calculate_clip_score:
+        import clip
+        clip_model, clip_preprocess = clip.load("ViT-B/32", device=device)
 
     outer_grad_context = nullcontext() if opt.use_pno_trajectory else torch.no_grad()
     precision_scope_device = opt.device if opt.device == "cuda" else "cpu"
@@ -569,7 +583,9 @@ def main(opt):
     wandb_img_callback.current_iteration = 0
     wandb_img_callback.current_prompt_idx = 0
     wandb_img_callback.stored_images = {}
-            
+
+    clip_scores = []
+
     with outer_grad_context, current_precision_scope, model.ema_scope():
         all_samples = list()
 
@@ -648,14 +664,35 @@ def main(opt):
                 if x_samples is not None:
                     all_samples.append(x_samples.cpu())
 
+
                     # Saving individual samples
                     for x_sample_tensor_normalized in x_samples: 
-                        img_np_to_save = 255. * rearrange(x_sample_tensor_normalized.cpu().numpy(), 'c h w -> h w c')
-                        img_pil_to_save = Image.fromarray(img_np_to_save.astype(np.uint8))
-                        img_pil_to_save = put_watermark(img_pil_to_save, wm_encoder)
-                        img_pil_to_save.save(os.path.join(sample_path, f"{base_count:05}.png"))
+                        img_np = 255. * rearrange(x_sample_tensor_normalized.cpu().numpy(), 'c h w -> h w c')
+                        img_pil = Image.fromarray(img_np.astype(np.uint8))
+                        img_pil = put_watermark(img_pil, wm_encoder)
+
+                        img_save_path = os.path.join(sample_path, f"{base_count:05}.png")
+                        img_pil.save(img_save_path)
+
+                        if opt.calculate_clip_score:
+                            # Transform image and prompt
+                            clip_input = clip_preprocess(img_pil).unsqueeze(0).to(device)
+                            text_token = clip.tokenize([opt.prompt]).to(device)
+
+                            with torch.no_grad():
+                                image_feat = clip_model.encode_image(clip_input)
+                                text_feat = clip_model.encode_text(text_token)
+                                score = torch.nn.functional.cosine_similarity(image_feat, text_feat).item()
+                                clip_scores.append(score)
+                                print(f"CLIP score for sample {base_count:05}: {score:.4f}")
+
                         base_count += 1
-        
+
+    if opt.calculate_clip_score and clip_scores:
+        avg_score = sum(clip_scores) / len(clip_scores)
+        print(f"Average CLIP score: {avg_score:.4f}")
+        wandb.log({"clip_score_avg": avg_score}, step=None)
+
         # Log collected intermediate DDIM images from standard pipeline
         if wandb_img_callback.stored_images:
             step_to_batch_images_map = {} # Renamed from step_to_batch
@@ -694,8 +731,18 @@ if __name__ == "__main__":
     cmd_opt = parse_args()
     if cmd_opt.use_pno_trajectory and cmd_opt.ddim_eta == 0.0:
         print("Warning: PNO trajectory for intermediate noises is most effective when --ddim_eta > 0.")
-    if not cmd_opt.ckpt: raise ValueError("Please specify checkpoint path with --ckpt")
-    if not os.path.exists(cmd_opt.ckpt): raise FileNotFoundError(f"Checkpoint not found: {cmd_opt.ckpt}")
-    if not os.path.exists(cmd_opt.config): raise FileNotFoundError(f"Config not found: {cmd_opt.config}")
+    # TEMP COMMENT
+    # if not cmd_opt.ckpt: raise ValueError("Please specify checkpoint path with --ckpt")
+    # if not os.path.exists(cmd_opt.ckpt): raise FileNotFoundError(f"Checkpoint not found: {cmd_opt.ckpt}")
+    # if not os.path.exists(cmd_opt.config): raise FileNotFoundError(f"Config not found: {cmd_opt.config}")
+    from huggingface_hub import hf_hub_download
+    cmd_opt.ckpt = hf_hub_download(
+    repo_id="stabilityai/stable-diffusion-2-1",
+    filename="v2-1_768-ema-pruned.ckpt"
+    )
+    print(cmd_opt.ckpt)
+
+
 
     main(cmd_opt)
+
