@@ -342,8 +342,6 @@ def main(opt):
             f"dataset_{opt.aligner_dataset}/"
             f"loss_{opt.aligner_loss}/"
             f"batch_{opt.aligner_batch_size}/"
-            f"dropout_{opt.aligner_dropout}/"
-            f"exclude_cls_{opt.aligner_exclude_cls}/"
             f"model_best.pth"
         )
         print(f"Loading aligner model from: {aligner_model_path}")
@@ -684,7 +682,13 @@ if __name__ == "__main__":
     if cmd_opt.use_pno_trajectory and cmd_opt.ddim_eta == 0.0:
         print("Warning: PNO trajectory for intermediate noises is most effective when --ddim_eta > 0.")
     if not cmd_opt.ckpt: raise ValueError("Please specify checkpoint path with --ckpt")
-    if not os.path.exists(cmd_opt.ckpt): raise FileNotFoundError(f"Checkpoint not found: {cmd_opt.ckpt}")
+    if not os.path.exists(cmd_opt.ckpt): 
+        print("Checkpoint not found, downloading from huggingface")
+        from huggingface_hub import hf_hub_download
+        cmd_opt.ckpt = hf_hub_download(
+        repo_id="stabilityai/stable-diffusion-2-1",
+        filename="v2-1_768-ema-pruned.ckpt"
+        )
     if not os.path.exists(cmd_opt.config): raise FileNotFoundError(f"Config not found: {cmd_opt.config}")
 
     main(cmd_opt)
