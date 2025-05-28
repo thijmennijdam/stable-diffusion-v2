@@ -11,9 +11,9 @@ class ImageToTextAlignerV1(nn.Module):
         super().__init__()
         self.proj = nn.Sequential(
             nn.LayerNorm(input_dim),
-            nn.Linear(input_dim, output_dim),
+            nn.Linear(input_dim, input_dim*2),
             nn.ReLU(),
-            nn.Linear(output_dim, output_dim),
+            nn.Linear(input_dim*2, output_dim),
         )
 
     def forward(self, x):

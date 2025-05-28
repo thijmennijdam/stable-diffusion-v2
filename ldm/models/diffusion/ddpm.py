@@ -543,6 +543,7 @@ class LatentDiffusion(DDPM):
                  ref_blend_weight=0.05,  # Add control for text-image blending
                  timestep_cond_start=0.0, 
                  timestep_cond_end=1.0,
+                 amplify_image_features=False,
                  ref_first=False,  # Add this parameter,
                  fusion_type="alpha_blend",  
                  fusion_token_type="all", # "cls_only", "except_cls", "all"
@@ -604,7 +605,7 @@ class LatentDiffusion(DDPM):
         self.fusion_token_type = fusion_token_type
         self.aligner_version = aligner_version
         self.aligner_dropout = aligner_dropout
-
+        self.amplify_image_features = amplify_image_features
         # if self.use_ref_img:
         #     self.create_ref_img_encoder()
 
@@ -959,7 +960,7 @@ class LatentDiffusion(DDPM):
             # Convert timestep to fraction (1.0 = start of diffusion, 0.0 = end)
             max_timestep = self.num_timesteps - 1  # Usually 999 for 1000 timesteps
             calculated_timestep_fraction = float(current_timestep) / float(max_timestep)
-            
+
             # Handle the case where start == end == 0.0 (never apply reference conditioning)
             if self.timestep_cond_start == 0.0 and self.timestep_cond_end == 0.0:
                 apply_ref_img = False
@@ -990,33 +991,36 @@ class LatentDiffusion(DDPM):
                 image_features = self.image_to_text_aligner(image_features).squeeze(0)  # [N_tokens, D]
                 
                 if self.fusion_type == "alpha_blend":
-                    print(f"Image features shape: {image_features.shape}")
-                    print(f"Text features shape: {self.stored_text_cond.shape}")
-                    # image_features = image_features.mean(dim=0) # [D]
-                    '''Potentially we need to keep the above instead of the if-elif-else statements below'''
-                    # Handle the aligner output
-                    if image_features.dim() == 3:  # [B, N_patches, D]
-                        image_features = image_features.mean(dim=(0, 1))  # [D]
-                    elif image_features.dim() == 2:  # [N_patches, D] or [B, D]
-                        if image_features.shape[0] == 1:  # [1, D] case
-                            image_features = image_features.squeeze(0)  # [D]
-                        else:  # [N_patches, D] case
-                            image_features = image_features.mean(dim=0)  # [D]
-                    
-                    # EXPERIMENTAL: Amplify image features to match text conditioning magnitude
-                    text_norm = torch.norm(self.stored_text_cond).item()
-                    image_norm = torch.norm(image_features).item()
-                    # Calculate amplification factor to make image features same magnitude as text
-                    amplification_factor = text_norm / image_norm if image_norm > 0 else 1.0
-                    # Clamp amplification to reasonable range
-                    amplification_factor = min(amplification_factor, 1000.0)  # Max 1000x amplification
-                    amplified_image_features = image_features * amplification_factor
-                    # Use amplified features for blending
+                    # 1) spatial pooling: always end up with a single D-vector
+                    if image_features.dim() == 3:           # [B, N_patches, D]
+                        image_features = image_features.mean(dim=(0, 1))   # [D]
+                    elif image_features.dim() == 2:         # [N_patches, D]  OR  [B, D]
+                        if image_features.shape[0] == 1:    # singleton batch
+                            image_features = image_features.squeeze(0)      # [D]
+                        else:
+                            image_features = image_features.mean(dim=0)     # [D]
+
+                    # 2) (optional) magnitude-matching
+                    if self.amplify_image_features:
+                        text_norm   = torch.norm(self.stored_text_cond).item()
+                        image_norm  = torch.norm(image_features).item()
+                        amp_factor  = text_norm / image_norm if image_norm > 0 else 1.0
+                        amp_factor  = min(amp_factor, 1000.0)       # cap runaway gains
+                        image_features = image_features * amp_factor
+
+                    # 3) α-blend
                     alpha = self.ref_blend_weight
-                    blended_text_cond = (1 - alpha) * self.stored_text_cond + alpha * amplified_image_features
-                    # Debug the new conditioning influence
-                    diff_from_original = torch.norm(blended_text_cond - self.stored_text_cond).item()
-                    relative_change = diff_from_original / text_norm if text_norm > 0 else 0
+                    blended_text_cond = (
+                        (1.0 - alpha) * self.stored_text_cond +
+                        alpha          * image_features
+                    )
+
+                    # optional debug -- only when amplify is on
+                    if self.amplify_image_features and torch.is_grad_enabled() is False:
+                        diff = torch.norm(blended_text_cond - self.stored_text_cond).item()
+                        rel  = diff / (torch.norm(self.stored_text_cond).item() + 1e-8)
+                        print(f"[VCF] amplify={self.amplify_image_features}  |  amp×={amp_factor:.2f}  "
+                            f"|  Δnorm={diff:.4f}  ({rel:.2%})")
                         
                 # Apply additional token filtering if needed
                 if self.fusion_token_type == "cls_only":
@@ -1038,12 +1042,12 @@ class LatentDiffusion(DDPM):
                     else:
                         blended_text_cond = torch.cat([self.stored_text_cond, image_token], dim=1)  # [B, 77+N_selected, D]
                 
-         # Handle CFG by checking if cond has doubled batch size
-        if isinstance(cond, torch.Tensor):
-            if cond.shape[0] == self.stored_text_cond.shape[0] * 2:
-                cond = blended_text_cond.repeat(2, 1, 1)
-            else:
-                cond = blended_text_cond
+                # Handle CFG by checking if cond has doubled batch size
+                if isinstance(cond, torch.Tensor):
+                    if cond.shape[0] == self.stored_text_cond.shape[0] * 2:
+                        cond = blended_text_cond.repeat(2, 1, 1)
+                    else:
+                        cond = blended_text_cond
                 
         # Convert conditioning to dict format expected by UNet
         if isinstance(cond, dict):
@@ -1523,6 +1527,9 @@ class LatentDiffusion(DDPM):
         """
         assert 0.0 <= weight <= 1.0, "Blend weight must be between 0.0 and 1.0"
         self.ref_blend_weight = weight
+    
+    def set_amplify_image_features(self, amplify_image_features):
+        self.amplify_image_features = amplify_image_features
         
     def set_use_ref_img(self, use_ref_img: bool):
         """

@@ -323,7 +323,8 @@ def parse_args():
         default=1.0,
         help="End timestep (as fraction from 0 to 1) for reference image conditioning",
     )
-    
+    parser.add_argument("--amplify_image_features", action='store_true', help="Amplifies image features during naive alpha blend")
+
     opt = parser.parse_args()
     return opt
 
@@ -353,6 +354,7 @@ def main(opt):
     if opt.ref_img:
         model.force_refresh_reference_image()  # Clear any cached images
         model.set_blend_weight(opt.ref_blend_weight)
+        model.set_amplify_image_features(opt.amplify_image_features)
         model.set_use_ref_img(True)
         model.create_ref_img_encoder()
         model.set_timestep_range(opt.timestep_cond_start, opt.timestep_cond_end)
