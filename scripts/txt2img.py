@@ -324,7 +324,7 @@ def put_watermark(img, wm_encoder=None):
 def main(opt):
     seed_everything(opt.seed)
     # Set project and entity name from environment variables 
-    opt.wandb_project = os.getenv("WANDB_PROJECT", "stable-diffusion-v2")
+    opt.wandb_project = os.getenv("WANDB_PROJECT", "stable-diffusion-v2-new-new")
     opt.wandb_entity = os.getenv("WANDB_ENTITY", "FoMo-2025")
 
     config = OmegaConf.load(f"{opt.config}")
@@ -716,15 +716,16 @@ if __name__ == "__main__":
     cmd_opt = parse_args()
     if cmd_opt.use_pno_trajectory and cmd_opt.ddim_eta == 0.0:
         print("Warning: PNO trajectory for intermediate noises is most effective when --ddim_eta > 0.")
-    # TEMP COMMENT
-    # if not cmd_opt.ckpt: raise ValueError("Please specify checkpoint path with --ckpt")
-    # if not os.path.exists(cmd_opt.ckpt): raise FileNotFoundError(f"Checkpoint not found: {cmd_opt.ckpt}")
-    # if not os.path.exists(cmd_opt.config): raise FileNotFoundError(f"Config not found: {cmd_opt.config}")
-    from huggingface_hub import hf_hub_download
-    cmd_opt.ckpt = hf_hub_download(
-    repo_id="stabilityai/stable-diffusion-2-1",
-    filename="v2-1_768-ema-pruned.ckpt"
-    )
+    if not cmd_opt.ckpt: raise ValueError("Please specify checkpoint path with --ckpt")
+    if not os.path.exists(cmd_opt.ckpt): 
+        print("Checkpoint not found, downloading from huggingface")
+        from huggingface_hub import hf_hub_download
+        cmd_opt.ckpt = hf_hub_download(
+        repo_id="stabilityai/stable-diffusion-2-1",
+        filename="v2-1_768-ema-pruned.ckpt"
+        )
+    if not os.path.exists(cmd_opt.config): raise FileNotFoundError(f"Config not found: {cmd_opt.config}")
+
     print(cmd_opt.ckpt)
 
 

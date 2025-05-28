@@ -631,13 +631,12 @@ class LatentDiffusion(DDPM):
         else:
             raise ValueError(f"Unknown aligner version: {self.aligner_version}")
 
-        # TEMP COMMENT
-        # if os.path.isfile(model_path):
-        #     state_dict = torch.load(model_path, map_location=self.device)
-        #     self.image_to_text_aligner.load_state_dict(state_dict)
-        #     print("ImageToTextAligner loaded successfully.")
-        # else:
-        #     raise FileNotFoundError(f"Model file not found at {model_path}")
+        if os.path.isfile(model_path):
+            state_dict = torch.load(model_path, map_location=self.device)
+            self.image_to_text_aligner.load_state_dict(state_dict)
+            print("ImageToTextAligner loaded successfully.")
+        else:
+            raise FileNotFoundError(f"Model file not found at {model_path}")
 
     def make_cond_schedule(self, ):
         self.cond_ids = torch.full(size=(self.num_timesteps,), fill_value=self.num_timesteps - 1, dtype=torch.long)
