@@ -24,10 +24,10 @@ class ImageToTextAlignerV2(nn.Module):
         super().__init__()
         self.layernorm = nn.LayerNorm(input_dim)
         self.mlp = nn.Sequential(
-            nn.Linear(input_dim, input_dim*2),
+            nn.Linear(input_dim, output_dim),
             nn.GELU(),
             nn.Dropout(dropout),
-            nn.Linear(input_dim*2, output_dim),
+            nn.Linear(output_dim, output_dim),
             nn.Dropout(dropout)
         )
 
