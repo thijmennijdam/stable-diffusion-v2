@@ -22,7 +22,6 @@ import math
 import sys
 
 load_dotenv()
-PREPROJECT = True # always true since we fixed it 
 
 if not os.getenv("WANDB_API_KEY"):
     raise ValueError("WANDB_API_KEY is not set in the environment.")
@@ -48,11 +47,8 @@ class CrossAttentionAlignLoss(torch.nn.Module):
     def __init__(self):
         super().__init__()
         self.sigma = 1.0  # Hyperparameter for Gaussian kernel, can be tuned
-        
-    def gaussian_kernel(self, x, y):
-        return torch.exp(-((x - y) ** 2).mean(-1) / (2 * self.sigma ** 2))  # [B, B, N]
 
-    def forward(self, img_tokens, text_tokens, loss_type="mse"):
+    def forward(self, img_tokens, text_tokens):
         B, N_img, D = img_tokens.shape
         # Compute attention from image to text
         attn_scores = torch.matmul(img_tokens, text_tokens.transpose(-2, -1))  # [B, N_img, 77]
@@ -63,28 +59,8 @@ class CrossAttentionAlignLoss(torch.nn.Module):
         recon_text = torch.matmul(attn_weights.transpose(1, 2), img_tokens)  # [B, 77, D]
 
         # Compute token-wise alignment loss
-        if loss_type == "mse":
-            loss = F.mse_loss(recon_text, text_tokens)
-            return loss
-        
-        elif loss_type == "mmd":
-            x = recon_text.unsqueeze(1)  # [B, 1, N, D]
-            y = text_tokens.unsqueeze(0)  # [1, B, N, D]
-            print(x.shape, y.shape)
-            K_xx = self.gaussian_kernel(x, x).mean()
-            K_yy = self.gaussian_kernel(y, y).mean()
-            K_xy = self.gaussian_kernel(x, y).mean()
-            return K_xx + K_yy - 2 * K_xy
-    
-def str2bool(v):
-    if isinstance(v, bool):
-        return v
-    if v.lower() in ('yes', 'true', 't', 'y', '1'):
-        return True
-    elif v.lower() in ('no', 'false', 'f', 'n', '0'):
-        return False
-    else:
-        raise argparse.ArgumentTypeError('Boolean value expected.')
+        loss = F.mse_loss(recon_text, text_tokens)
+        return loss
 
 def prepare_dataloaders(
     dataset_names: List[str],
@@ -179,8 +155,8 @@ def evaluate_loss(
     loss_fn: nn.Module,
     aligner: nn.Module,
     device: str,
-    exclude_cls: bool = False,
-    loss_type: str = "cosine"
+    loss_type: str = "cosine",
+    infonce_lambda: float = 1.0
 ) -> float:
     """
     Computes average loss over a given dataloader.
@@ -192,15 +168,21 @@ def evaluate_loss(
             images = batch["image"].to(device)
             texts = batch["text"]
             text_features = clip_text_encoder.encode(texts)
-            image_features = clip_image_encoder(images, preproject=PREPROJECT, exclude_cls=exclude_cls)
-            if loss_type == "infonce":
+            image_features = clip_image_encoder(images)
+
+            if loss_type == "combined":
+                mapped_img_tokens = aligner(image_features)
+                infonce_loss = loss_fn["infonce"](mapped_img_tokens, text_features)
+                cross_attention_loss = loss_fn["cross_attention"](mapped_img_tokens, text_features)
+                loss = infonce_lambda * infonce_loss + cross_attention_loss
+            elif loss_type == "infonce":
                 mapped_img_tokens = aligner(image_features)
                 loss = loss_fn(mapped_img_tokens, text_features)
-            elif loss_type == "mse" or loss_type == "mmd":
+            elif loss_type == "cross_attention":
                 mapped_img_tokens = aligner(image_features)
-                loss = loss_fn(mapped_img_tokens, text_features, loss_type=loss_type)
+                loss = loss_fn(mapped_img_tokens, text_features)
             else:
-                loss = loss_fn(image_features, text_features, aligner)
+                raise ValueError(f"Unknown loss type: {loss_type}")
             total_loss += loss.item()
     aligner.train()
     return total_loss / len(dataloader)
@@ -213,20 +195,19 @@ def train_aligner(
     clip_image_encoder: nn.Module,
     loss_fn: nn.Module,
     args: argparse.Namespace,
-    loss_type: str = "cosine"
 ) -> None:
     """
     Trains the image-to-text aligner model with validation loss logging and best model saving.
     """
     device = args.device
     datasets_name = "+".join(args.datasets) if len(args.datasets) > 1 else args.datasets[0]
-    save_path = f"weights/aligner_models/version_{args.version}/dataset_{datasets_name}/loss_{args.loss}/batch_{args.batch_size}/dropout_{args.dropout}/exclude_cls_{args.exclude_cls}/model.pth"
+    save_path = f"weights/aligner_models/version_{args.version}/dataset_{datasets_name}/loss_{args.loss}/batch_{args.batch_size}/model.pth"
     save_every = args.save_every
 
     if args.version == "v1":
         aligner = ImageToTextAlignerV1(input_dim=1280, output_dim=1024).to(device)
     elif args.version == "v2":
-        aligner = ImageToTextAlignerV2(input_dim=1280, output_dim=1024, dropout=args.dropout).to(device)
+        aligner = ImageToTextAlignerV2(input_dim=1280, output_dim=1024).to(device)
     else:
         raise ValueError(f"Unknown aligner version: {args.version}")
 
@@ -234,7 +215,6 @@ def train_aligner(
         print(f"Loading pretrained aligner from {args.resume_from}")
         aligner.load_state_dict(torch.load(args.resume_from, map_location=device))
     
-    exclude_cls = args.exclude_cls
     wandb.watch(aligner, log="all")
 
     optimizer = torch.optim.AdamW(aligner.parameters(), lr=args.lr, weight_decay=0.01)
@@ -254,37 +234,59 @@ def train_aligner(
             images = batch["image"].to(device)
             texts = batch["text"]
             text_features = clip_text_encoder.encode(texts)
-            image_features = clip_image_encoder(images,  preproject=PREPROJECT, exclude_cls=exclude_cls)
-            if loss_type == "infonce":
+            image_features = clip_image_encoder(images)
+
+            optimizer.zero_grad()
+            if args.loss == "combined":
+                mapped_img_tokens = aligner(image_features)
+                infonce_loss = loss_fn["infonce"](mapped_img_tokens, text_features)
+                cross_attention_loss = loss_fn["cross_attention"](mapped_img_tokens, text_features)
+                loss = args.infonce_lambda * infonce_loss + cross_attention_loss
+            elif args.loss == "infonce":
                 mapped_img_tokens = aligner(image_features)
                 loss = loss_fn(mapped_img_tokens, text_features)
-            elif loss_type == "mse" or loss_type == "mmd":
+            elif args.loss == "cross_attention":
                 mapped_img_tokens = aligner(image_features)
-                loss = loss_fn(mapped_img_tokens, text_features, loss_type=loss_type)
+                loss = loss_fn(mapped_img_tokens, text_features)
             else:
-                loss = loss_fn(image_features, text_features, aligner)
-            optimizer.zero_grad()
+                raise ValueError(f"Unknown loss type: {args.loss}")
+
             loss.backward()
             torch.nn.utils.clip_grad_norm_(aligner.parameters(), 1.0)
             optimizer.step()
             scheduler.step()
             current_lr = optimizer.param_groups[0]['lr']
-            
-            epoch_loss += loss.item()
-            progress.set_postfix(loss=loss.item())
-            wandb.log({
-                "train_loss_step": loss.item(),
-                "lr": current_lr,                   # ← add this line
-                
+
+            log_dict = {
+                "lr": current_lr,
                 "epoch": epoch + 1,
                 "step": step + 1 + epoch * len(train_loader)
-            })
+            }
+
+            if args.loss == "combined":
+                log_dict["train_infonce_loss_step"] = infonce_loss.item()
+                log_dict["train_cross_attention_loss_step"] = cross_attention_loss.item()
+                log_dict["train_loss_step"] = loss.item()
+            elif args.loss == "infonce":
+                log_dict["train_loss_step"] = loss.item()
+            elif args.loss == "cross_attention":
+                log_dict["train_loss_step"] = loss.item()
+            else:
+                raise ValueError(f"Unknown loss type: {args.loss}")
+
+            wandb.log(log_dict)
+
+            epoch_loss += loss.item()
+            progress.set_postfix(loss=loss.item())
             
             step += 1
             
             
         avg_train_loss = epoch_loss / len(train_loader)
-        avg_val_loss = evaluate_loss(val_loader, clip_text_encoder, clip_image_encoder, loss_fn, aligner, device, exclude_cls, loss_type)
+        if args.loss == "combined":
+            avg_val_loss = evaluate_loss(val_loader, clip_text_encoder, clip_image_encoder, loss_fn, aligner, device, args.loss, args.infonce_lambda)
+        else:
+            avg_val_loss = evaluate_loss(val_loader, clip_text_encoder, clip_image_encoder, loss_fn, aligner, device, args.loss)
         print(f"Epoch {epoch + 1}, Train Loss: {avg_train_loss:.4f}, Val Loss: {avg_val_loss:.4f}")
         wandb.log({"epoch": epoch + 1, "train_loss": avg_train_loss, "val_loss": avg_val_loss})
         if avg_val_loss < best_val_loss:
@@ -302,7 +304,7 @@ def train_aligner(
     artifact.add_file(best_model_path)
     wandb.log_artifact(artifact)
     aligner.load_state_dict(torch.load(best_model_path))
-    final_test_loss = evaluate_loss(test_loader, clip_text_encoder, clip_image_encoder, loss_fn, aligner, device, exclude_cls, loss_type)
+    final_test_loss = evaluate_loss(test_loader, clip_text_encoder, clip_image_encoder, loss_fn, aligner, device, args.loss, args.infonce_lambda)
     print(f"Best Model Test Loss: {final_test_loss:.4f}")
     wandb.log({"final_test_loss": final_test_loss})
 
@@ -328,7 +330,7 @@ def parse_args() -> argparse.Namespace:
         description="Train a text-image aligner using FrozenOpenCLIPEmbedder."
     )
     parser.add_argument("--datasets", nargs="+", default="[flickr30k]")
-    parser.add_argument("--loss", type=str, default="cosine", choices=["infonce", "mmd", "mse"])
+    parser.add_argument("--loss", type=str, default="cross_attention", choices=["infonce", "cross_attention", "combined"])
     parser.add_argument("--batch_size", type=int, default=32)
     parser.add_argument("--epochs", type=int, default=10)
     parser.add_argument("--lr", type=float, default=1e-4)
@@ -337,10 +339,9 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--wandb_entity", type=str, default=None)
     parser.add_argument("--save_every", type=int, default=5, help="Save model every N epochs")
     parser.add_argument("--resume_from", type=str, default=None, help="Path to a pretrained aligner checkpoint")
-    parser.add_argument("--exclude_cls", type=str2bool, default=False, const=True, nargs='?', help="Exclude CLS token from image features")
-    parser.add_argument("--dropout", type=float, default=0.0, help="Dropout rate for aligner MLP (default: 0.0)")
     parser.add_argument("--seed", type=int, default=42, help="Random seed for reproducibility")
     parser.add_argument("--version", type=str, default="v2", choices=["v1", "v2"], help="Aligner model version (v1 or v2)")
+    parser.add_argument("--infonce_lambda", type=float, default=0.2, help="Weight for InfoNCE loss in combined loss")
     return parser.parse_args()
 
 
@@ -360,18 +361,22 @@ if __name__ == "__main__":
         project=project_name,
         entity=entity_name,
         config=vars(args),
-        name=f"aligner{args.version}-{datasets_name}-{args.loss}-{args.epochs}epochs-{args.batch_size}bs-{args.lr}lr-dropout{args.dropout}-exclude_cls{args.exclude_cls}"
+        name=f"aligner{args.version}-{datasets_name}-{args.loss}-{args.epochs}epochs-{args.batch_size}bs-{args.lr}lr{f'-lambda{args.infonce_lambda}' if args.loss == 'combined' else ''}"
     )
-    if args.loss == "cosine":
-        loss_function = CosineAlignmentLoss()
+
+    loss_function = None
+    if args.loss == "cross_attention":
+        loss_function = CrossAttentionAlignLoss()
     elif args.loss == "infonce":
         loss_function = InfoNCELoss()
-    # elif args.loss == "mmd":
-        # loss_function = MMDLoss()
-    elif args.loss == "mse" or args.loss == "mmd":
-        loss_function = CrossAttentionAlignLoss()
+    elif args.loss == "combined":
+        loss_function = {
+            "infonce": InfoNCELoss(),
+            "cross_attention": CrossAttentionAlignLoss()
+        }
     else:
         raise ValueError(f"Unknown loss type: {args.loss}")
+
     new_list_datasets = []
     for datset in args.datasets:
         if "+" in datset:
@@ -385,6 +390,6 @@ if __name__ == "__main__":
     ).to(args.device)
     clip_image_encoder = FrozenOpenCLIPImageEmbedder(device=args.device).to(args.device)
     train_aligner(
-        train_loader, val_loader, clip_text_encoder, clip_image_encoder, loss_function, args, args.loss
+        train_loader, val_loader, clip_text_encoder, clip_image_encoder, loss_function, args
     )
     wandb.finish()

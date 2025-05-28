@@ -288,7 +288,7 @@ def parse_args():
         "--aligner_loss",
         type=str,
         default="infonce",
-        choices=["infonce", "mmd", "mse"],
+        choices=["infonce", "cross_attention", "combined"],
         help="Loss function used for training the aligner"
     )
     parser.add_argument(
@@ -296,20 +296,6 @@ def parse_args():
         type=int,
         default=64,
         help="Batch size used for training the aligner"
-    )
-    parser.add_argument(
-        "--aligner_dropout",
-        type=float,
-        default=0.1,
-        help="Dropout rate used for training the aligner"
-    )
-    parser.add_argument(
-        "--aligner_exclude_cls",
-        type=str2bool,
-        default=True,
-        const=True,
-        nargs='?',
-        help="Whether CLS token was excluded during aligner training"
     )
     parser.add_argument(
         "--timestep_cond_start",
@@ -346,7 +332,6 @@ def main(opt):
     # Add aligner parameters to the model config if reference image is used
     if opt.ref_img:
         config.model.params.aligner_version = opt.aligner_version
-        config.model.params.aligner_dropout = opt.aligner_dropout
 
     device = torch.device("cuda") if opt.device == "cuda" else torch.device("cpu")
     model = load_model_from_config(config, f"{opt.ckpt}", device)
@@ -365,8 +350,6 @@ def main(opt):
             f"dataset_{opt.aligner_dataset}/"
             f"loss_{opt.aligner_loss}/"
             f"batch_{opt.aligner_batch_size}/"
-            f"dropout_{opt.aligner_dropout}/"
-            f"exclude_cls_{opt.aligner_exclude_cls}/"
             f"model_best.pth"
         )
         print(f"Loading aligner model from: {aligner_model_path}")
