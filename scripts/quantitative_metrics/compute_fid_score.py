@@ -33,6 +33,7 @@ def collect_by_fusion_type(base_dir):
     groups = {}
     for run_dir in glob(os.path.join(base_dir, "*")):
         config_path = os.path.join(run_dir, "config.json")
+        print(config_path)
         samples_dir = os.path.join(run_dir, "samples")
         if not os.path.isfile(config_path) or not os.path.isdir(samples_dir):
             continue
@@ -60,7 +61,6 @@ def compute_fid_between_groups(group_a_paths, group_b_paths, max_images=50, devi
 if __name__ == "__main__":
     args = parse_args()
     groups = collect_by_fusion_type(args.base_dir)
-
     print("Available fusion types:", list(groups.keys()))
     a, b = args.fusion_type_a, args.fusion_type_b
     if a in groups and b in groups:
