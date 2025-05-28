@@ -10,7 +10,7 @@ ALIGNER_DATASETS=("coco")
 ALIGNER_LOSSES=("infonce")
 
 FUSION_TOKEN_TYPES=("all")
-FUSION_TYPES=("cross_attention")
+FUSION_TYPES=("cross_attention" "alpha_blend" "concat")
 USE_PNO_OPTIONS=("false")
 
 PROMPT="a photo of a cat"

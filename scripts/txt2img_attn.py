@@ -300,7 +300,7 @@ def parse_args():
         type=str,
         nargs="?",
         help="dir to write results to",
-        default=f"outputs/txt2img-samples/{datetime.now().strftime('%d-%m-%Y_%H-%M-%S')}"
+        default=f"outputs/txt2img-samples/"
     )
     parser.add_argument(
         "--steps",
@@ -589,8 +589,18 @@ def main(opt):
         sampler = DDIMSampler(model, device=device)
         sampler.ddim_eta = opt.ddim_eta # Set eta on the sampler instance (needed for PNO)
 
-    os.makedirs(opt.outdir, exist_ok=True)
-    outpath = opt.outdir
+    datetime_path = f"{datetime.now().strftime('%d-%m-%Y_%H-%M-%S')}"
+    outpath = os.path.join(opt.outdir, datetime_path)
+    
+
+    # add alpha blend weight and fuse type
+    outpath = f"{outpath}_alpha_{opt.ref_blend_weight:.2f}_{opt.fusion_type}"
+    
+    os.makedirs(outpath, exist_ok=True)
+    
+
+    
+
     # save prompt to file
     with open(os.path.join(outpath, "prompt.txt"), "w") as f:
         f.write(opt.prompt)
@@ -613,8 +623,11 @@ def main(opt):
             data = f.read().splitlines()
             data = [p for p in data for i in range(opt.repeat)]
             data = list(chunk(data, batch_size))
+            
+            
 
     sample_path = os.path.join(outpath, "samples")
+    # add the alpha blend weight to the output directory name
     os.makedirs(sample_path, exist_ok=True)
     sample_count = 0
     base_count = len(os.listdir(sample_path))
