@@ -85,16 +85,16 @@ uv run python scripts/txt2img.py \
   --ckpt ./weights/v2-1_768-ema-pruned.ckpt \
   --config configs/stable-diffusion/v2-inference-v.yaml \
   --H 768 --W 768 \
-  --ref_img data/picasso_style.jpg \
+  --ref_img data/cat.jpg \
   --ref_blend_weight 0.3 \
   --aligner_version v1 \
-  --aligner_dataset coco \
+  --aligner_dataset flickr30k \
   --aligner_loss infonce \
   --fusion_token_type all \
   --fusion_type alpha_blend \
   --calculate_clip_score \
-  --time_cond_start 0.0 \
-  --time_cond_end 0.5
+  --timestep_cond_start 0.0 \
+  --timestep_cond_end 1
 
 uv run python scripts/txt2img.py \
   --prompt "a photo of a cat" \
@@ -110,7 +110,6 @@ uv run python scripts/txt2img.py \
   --fusion_type alpha_blend \
   --calculate_clip_score \
   --n_iter 1
-
 
     --timestep_cond_start 0 \
   --timestep_cond_end 1 \
