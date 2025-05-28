@@ -1,10 +1,10 @@
 #!/bin/bash
-#SBATCH --partition=gpu_a100
+#SBATCH --partition=gpu_h100
 #SBATCH --gpus=1
 #SBATCH --cpus-per-task=8
 #SBATCH --job-name=sd2_aligner_inference
-#SBATCH --output=/home/azywot/FOMO/stable-diffusion-v2/outputs/jobs/sd2_aligner_inference_%A.out
-#SBATCH --time=00:05:00
+#SBATCH --output=RunMethod_%A_h100_inference_job_conditioning_schedule_0102.out
+#SBATCH --time=00:10:00
 #SBATCH --mem=40G
 #SBATCH --hint=nomultithread
 
@@ -18,6 +18,7 @@ module load CUDA/12.1.1
 source activate ldmv2
 
 # Run inference
+
 python scripts/txt2img.py \
   --prompt "a photo of a cat" \
   --ckpt "checkpoints/model_checkpoint.ckpt" \
@@ -28,6 +29,9 @@ python scripts/txt2img.py \
   --ref_blend_weight 1.0 \
   --fusion_token_type "all" \
   --use_cross_attention_fusion \
-  --use_ref_img
+  --use_ref_img \
+  --timestep_cond_start 0.0 \
+  --timestep_cond_end 0.5
+
 
 echo "✅ Inference job completed at: $(date)"

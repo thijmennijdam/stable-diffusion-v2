@@ -172,4 +172,5 @@ uv.lock
 
 thijmen.md
 model_checkpoint.ckpt
-weights/
+weights/*
+my_local_cache/

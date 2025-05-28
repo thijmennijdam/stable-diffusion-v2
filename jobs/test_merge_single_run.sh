@@ -77,4 +77,41 @@ uv run python scripts/txt2img.py \
   --aligner_dataset coco \
   --aligner_loss infonce \
   --fusion_token_type all \
-  --fusion_type alpha_blend
+  --fusion_type alpha_blend \
+  --calculate_clip_score
+
+uv run python scripts/txt2img.py \
+  --prompt "a photo of a cat" \
+  --ckpt ./weights/v2-1_768-ema-pruned.ckpt \
+  --config configs/stable-diffusion/v2-inference-v.yaml \
+  --H 768 --W 768 \
+  --ref_img data/picasso_style.jpg \
+  --ref_blend_weight 0.3 \
+  --aligner_version v1 \
+  --aligner_dataset coco \
+  --aligner_loss infonce \
+  --fusion_token_type all \
+  --fusion_type alpha_blend \
+  --calculate_clip_score \
+  --time_cond_start 0.0 \
+  --time_cond_end 0.5
+
+uv run python scripts/txt2img.py \
+  --prompt "a photo of a cat" \
+  --ckpt ./weights/v2-1_768-ema-pruned.ckpt \
+  --config configs/stable-diffusion/v2-inference-v.yaml \
+  --H 768 --W 768 \
+  --ref_img data/picasso_style.jpg \
+  --ref_blend_weight 0.3 \
+  --aligner_version v1 \
+  --aligner_dataset coco \
+  --aligner_loss infonce \
+  --fusion_token_type all \
+  --fusion_type alpha_blend \
+  --calculate_clip_score \
+  --n_samples 1 \
+  --n_iter 1
+
+
+    --timestep_cond_start 0 \
+  --timestep_cond_end 1 \

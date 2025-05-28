@@ -311,8 +311,9 @@ class DDPM(pl.LightningModule):
         posterior_log_variance_clipped = extract_into_tensor(self.posterior_log_variance_clipped, t, x_t.shape)
         return posterior_mean, posterior_variance, posterior_log_variance_clipped
 
-    def p_mean_variance(self, x, t, clip_denoised: bool):
-        model_out = self.model(x, t)
+    def p_mean_variance(self, x, t, clip_denoised: bool, timestep_fraction=None):
+        model_out = self.model(x, t, timestep_fraction=timestep_fraction)
+        # model_out = self.model.apply_model(x, t, timestep_fraction=timestep_fraction)
         if self.parameterization == "eps":
             x_recon = self.predict_start_from_noise(x, t=t, noise=model_out)
         elif self.parameterization == "x0":
@@ -326,7 +327,9 @@ class DDPM(pl.LightningModule):
     @torch.no_grad()
     def p_sample(self, x, t, clip_denoised=True, repeat_noise=False):
         b, *_, device = *x.shape, x.device
-        model_mean, _, model_log_variance = self.p_mean_variance(x=x, t=t, clip_denoised=clip_denoised)
+        # Calculate timestep fraction similar to DDIM
+        timestep_fraction = float(t[0].item()) / float(self.num_timesteps - 1)
+        model_mean, _, model_log_variance = self.p_mean_variance(x=x, t=t, clip_denoised=clip_denoised, timestep_fraction=timestep_fraction)
         noise = noise_like(x.shape, device, repeat_noise)
         # no noise when t == 0
         nonzero_mask = (1 - (t == 0).float()).reshape(b, *((1,) * (len(x.shape) - 1)))
@@ -538,6 +541,9 @@ class LatentDiffusion(DDPM):
                  force_null_conditioning=False,
                  use_ref_img=False,
                  ref_blend_weight=0.05,  # Add control for text-image blending
+                 timestep_cond_start=0.0, 
+                 timestep_cond_end=1.0,
+                 amplify_image_features=False,
                  ref_first=False,  # Add this parameter,
                  fusion_type="alpha_blend",  
                  fusion_token_type="all", # "cls_only", "except_cls", "all"
@@ -592,11 +598,16 @@ class LatentDiffusion(DDPM):
         ################################
         self.use_ref_img = use_ref_img
         self.ref_blend_weight = ref_blend_weight
+        self.timestep_cond_start = timestep_cond_start  
+        self.timestep_cond_end = timestep_cond_end    
         self.ref_first = ref_first  # Add this line
         self.fusion_type = fusion_type
         self.fusion_token_type = fusion_token_type
         self.aligner_version = aligner_version
         self.aligner_dropout = aligner_dropout
+        self.amplify_image_features = amplify_image_features
+        # if self.use_ref_img:
+        #     self.create_ref_img_encoder()
 
 
     def create_ref_img_encoder(self):
@@ -620,12 +631,13 @@ class LatentDiffusion(DDPM):
         else:
             raise ValueError(f"Unknown aligner version: {self.aligner_version}")
 
-        if os.path.isfile(model_path):
-            state_dict = torch.load(model_path, map_location=self.device)
-            self.image_to_text_aligner.load_state_dict(state_dict)
-            print("ImageToTextAligner loaded successfully.")
-        else:
-            raise FileNotFoundError(f"Model file not found at {model_path}")
+        # TEMP COMMENT
+        # if os.path.isfile(model_path):
+        #     state_dict = torch.load(model_path, map_location=self.device)
+        #     self.image_to_text_aligner.load_state_dict(state_dict)
+        #     print("ImageToTextAligner loaded successfully.")
+        # else:
+        #     raise FileNotFoundError(f"Model file not found at {model_path}")
 
     def make_cond_schedule(self, ):
         self.cond_ids = torch.full(size=(self.num_timesteps,), fill_value=self.num_timesteps - 1, dtype=torch.long)
@@ -708,70 +720,56 @@ class LatentDiffusion(DDPM):
         return self.scale_factor * z
 
     def get_learned_conditioning(self, c, ref_image=None):
+        # Get the base text conditioning
         if self.cond_stage_forward is None:
             if hasattr(self.cond_stage_model, 'encode') and callable(self.cond_stage_model.encode):
-                c = self.cond_stage_model.encode(c)
-                if isinstance(c, DiagonalGaussianDistribution):
-                    c = c.mode()
+                text_cond = self.cond_stage_model.encode(c)
+                if isinstance(text_cond, DiagonalGaussianDistribution):
+                    text_cond = text_cond.mode()
             else:
-                c = self.cond_stage_model(c)
+                text_cond = self.cond_stage_model(c)
         else:
             assert hasattr(self.cond_stage_model, self.cond_stage_forward)
-            c = getattr(self.cond_stage_model, self.cond_stage_forward)(c)
-            
-        ## --------- Visual Concept Fusion implementation --------- ##
+            text_cond = getattr(self.cond_stage_model, self.cond_stage_forward)(c)
+        
+        # Store original text conditioning and reference image for dynamic use during diffusion
         if self.use_ref_img and ref_image is not None:
-            ref_image = ref_image.to(self.device)
-
-            # Configure exclude_cls based on fusion_token_type
-            if self.fusion_token_type == "cls_only":
-                # exclude_cls = False  # Get all tokens including CLS
-                self.clip_model.exclude_cls = False
-            elif self.fusion_token_type == "except_cls":
-                # exclude_cls = True   # Exclude CLS token
-                self.clip_model.exclude_cls = True
-            elif self.fusion_token_type == "all":
-                # exclude_cls = False  # Get all tokens including CLS
-                self.clip_model.exclude_cls = False
-            else:
-                raise ValueError(f"Invalid fusion_token_type: {self.fusion_token_type}. "
-                               f"Must be one of: 'cls_only', 'except_cls', 'all'")
-
-            # Extract CLIP image features with appropriate exclude_cls setting
-            image_features = self.clip_model(ref_image)  # [B, N_tokens, D]
-            image_features = self.image_to_text_aligner(image_features).squeeze(0)  # [N_tokens, D]
-            
-            if self.fusion_type == "alpha_blend":
-                image_features = image_features.mean(dim=0) # [D]
-                print(f"Image features shape: {image_features.shape}")
-                print(f"Text features shape: {c.shape}")
-                # Blend text and image features
-                alpha = self.ref_blend_weight
-                c = (1 - alpha) * c + alpha * image_features
-                return c
-            
-            # Apply additional token filtering if needed
-            if self.fusion_token_type == "cls_only":
-                # Use only the first token (CLS token)
-                image_features = image_features[:1, :]  # [1, D]
-            # For "except_cls" and "all", no additional filtering needed as exclude_cls handles it
-            
-            image_token = image_features.unsqueeze(0)  # [1, N_selected, D]
-            # Replicate image token to match batch size
-            image_token = image_token.repeat(c.shape[0], 1, 1)  # [B, N_selected, D]
-            
-            if self.fusion_type == "cross_attention":
-                # Use cross-attention fusion instead of concatenation
-                c = self.cross_attention_fusion(c, image_token)  # [B, 77, D] -> [B, 77, D]
-            else:
-                # Original concatenation approach
-                if self.ref_first:
-                    c = torch.cat([image_token, c], dim=1)  # [B, N_selected+77, D]
-                else:
-                    c = torch.cat([c, image_token], dim=1)  # [B, 77+N_selected, D]
-
-        return c
+            self.stored_text_cond = text_cond.clone()  # Store original
+            self.stored_ref_image = ref_image.clone()  # Store reference image
+            # For now, return text conditioning without blending
+            # The blending will happen dynamically during diffusion steps
+            return text_cond
+        
+        return text_cond
     
+    def set_timestep_range(self, start, end):
+        """
+        Set the timestep range for reference image conditioning.
+        
+        Args:
+            start (float): Start timestep as a fraction (0.0 to 1.0)
+            end (float): End timestep as a fraction (0.0 to 1.0)
+            
+        Special cases:
+            - start == end == 0.0: Never apply reference conditioning
+            - start > end: Never apply reference conditioning  
+            - start == 0.0, end == 1.0: Always apply reference conditioning
+            - start == 0.5, end == 1.0: Apply only in first half of diffusion (high noise)
+        """
+        assert 0.0 <= start <= 1.0, "Start timestep must be between 0.0 and 1.0"
+        assert 0.0 <= end <= 1.0, "End timestep must be between 0.0 and 1.0"
+        
+        self.timestep_cond_start = start
+        self.timestep_cond_end = end
+        
+        if start == 0.0 and end == 0.0:
+            print("INFO: Reference conditioning disabled (never apply)")
+        elif start > end:
+            print("INFO: Invalid range - reference conditioning disabled")
+        elif start == 0.0 and end == 1.0:
+            print("INFO: Reference conditioning enabled for all timesteps")
+        else:
+            print(f"INFO: Reference conditioning enabled for timestep fraction range [{start}, {end}]")
 
     def meshgrid(self, h, w):
         y = torch.arange(0, h).view(h, 1, 1).repeat(1, w, 1)
@@ -946,9 +944,113 @@ class LatentDiffusion(DDPM):
                 c = self.q_sample(x_start=c, t=tc, noise=torch.randn_like(c.float()))
         return self.p_losses(x, c, t, *args, **kwargs)
 
+    '''Feature amplification version'''
     def apply_model(self, x_noisy, t, cond, return_ids=False):
+        # Apply dynamic reference image conditioning based on diffusion timestep
+        if (self.use_ref_img and 
+            hasattr(self, 'stored_text_cond') and 
+            hasattr(self, 'stored_ref_image')):
+            
+            # Calculate timestep fraction from the actual diffusion timesteps t
+            if isinstance(t, torch.Tensor):
+                current_timestep = t[0].item()  # Get scalar value
+            else:
+                current_timestep = t
+                
+            # Convert timestep to fraction (1.0 = start of diffusion, 0.0 = end)
+            max_timestep = self.num_timesteps - 1  # Usually 999 for 1000 timesteps
+            calculated_timestep_fraction = float(current_timestep) / float(max_timestep)
+
+            # Handle the case where start == end == 0.0 (never apply reference conditioning)
+            if self.timestep_cond_start == 0.0 and self.timestep_cond_end == 0.0:
+                apply_ref_img = False
+            elif self.timestep_cond_start > self.timestep_cond_end:
+                apply_ref_img = False
+            else:
+                # Normal range check
+                apply_ref_img = (self.timestep_cond_start <= calculated_timestep_fraction <= self.timestep_cond_end)
+            
+            if apply_ref_img:
+                ref_image = self.stored_ref_image.to(self.device)
+                
+                # Configure exclude_cls based on fusion_token_type
+                if self.fusion_token_type == "cls_only":
+                    # exclude_cls = False  # Get all tokens including CLS
+                    self.clip_model.exclude_cls = False
+                elif self.fusion_token_type == "except_cls":
+                    # exclude_cls = True   # Exclude CLS token
+                    self.clip_model.exclude_cls = True
+                elif self.fusion_token_type == "all":
+                    # exclude_cls = False  # Get all tokens including CLS
+                    self.clip_model.exclude_cls = False
+                else:
+                    raise ValueError(f"Invalid fusion_token_type: {self.fusion_token_type}. "
+                                    f"Must be one of: 'cls_only', 'except_cls', 'all'")
+
+                image_features = self.clip_model(ref_image)
+                image_features = self.image_to_text_aligner(image_features).squeeze(0)  # [N_tokens, D]
+                
+                if self.fusion_type == "alpha_blend":
+                    # 1) spatial pooling: always end up with a single D-vector
+                    if image_features.dim() == 3:           # [B, N_patches, D]
+                        image_features = image_features.mean(dim=(0, 1))   # [D]
+                    elif image_features.dim() == 2:         # [N_patches, D]  OR  [B, D]
+                        if image_features.shape[0] == 1:    # singleton batch
+                            image_features = image_features.squeeze(0)      # [D]
+                        else:
+                            image_features = image_features.mean(dim=0)     # [D]
+
+                    # 2) (optional) magnitude-matching
+                    if self.amplify_image_features:
+                        text_norm   = torch.norm(self.stored_text_cond).item()
+                        image_norm  = torch.norm(image_features).item()
+                        amp_factor  = text_norm / image_norm if image_norm > 0 else 1.0
+                        amp_factor  = min(amp_factor, 1000.0)       # cap runaway gains
+                        image_features = image_features * amp_factor
+
+                    # 3) α-blend
+                    alpha = self.ref_blend_weight
+                    blended_text_cond = (
+                        (1.0 - alpha) * self.stored_text_cond +
+                        alpha          * image_features
+                    )
+
+                    # optional debug -- only when amplify is on
+                    if self.amplify_image_features and torch.is_grad_enabled() is False:
+                        diff = torch.norm(blended_text_cond - self.stored_text_cond).item()
+                        rel  = diff / (torch.norm(self.stored_text_cond).item() + 1e-8)
+                        print(f"[VCF] amplify={self.amplify_image_features}  |  amp×={amp_factor:.2f}  "
+                            f"|  Δnorm={diff:.4f}  ({rel:.2%})")
+                        
+                # Apply additional token filtering if needed
+                if self.fusion_token_type == "cls_only":
+                    # Use only the first token (CLS token)
+                    image_features = image_features[:1, :]  # [1, D]
+                # For "except_cls" and "all", no additional filtering needed as exclude_cls handles it
+                
+                image_token = image_features.unsqueeze(0)  # [1, N_selected, D]
+                # Replicate image token to match batch size
+                image_token = image_token.repeat(self.stored_text_cond.shape[0], 1, 1)  # [B, N_selected, D]
+                
+                if self.fusion_type == "cross_attention":
+                    # Use cross-attention fusion instead of concatenation
+                    blended_text_cond = self.cross_attention_fusion(self.stored_text_cond, image_token)  # [B, 77, D] -> [B, 77, D]
+                elif self.fusion_type == "concat":
+                    # Original concatenation approach
+                    if self.ref_first:
+                        blended_text_cond = torch.cat([image_token, self.stored_text_cond], dim=1)  # [B, N_selected+77, D]
+                    else:
+                        blended_text_cond = torch.cat([self.stored_text_cond, image_token], dim=1)  # [B, 77+N_selected, D]
+                
+                # Handle CFG by checking if cond has doubled batch size
+                if isinstance(cond, torch.Tensor):
+                    if cond.shape[0] == self.stored_text_cond.shape[0] * 2:
+                        cond = blended_text_cond.repeat(2, 1, 1)
+                    else:
+                        cond = blended_text_cond
+                
+        # Convert conditioning to dict format expected by UNet
         if isinstance(cond, dict):
-            # hybrid case, cond is expected to be a dict
             pass
         else:
             if not isinstance(cond, list):
@@ -956,12 +1058,20 @@ class LatentDiffusion(DDPM):
             key = 'c_concat' if self.model.conditioning_key == 'concat' else 'c_crossattn'
             cond = {key: cond}
 
+        # Call the UNet without timestep_fraction since it doesn't support it
         x_recon = self.model(x_noisy, t, **cond)
-
+        
         if isinstance(x_recon, tuple) and not return_ids:
             return x_recon[0]
         else:
             return x_recon
+
+    def force_refresh_reference_image(self):
+        """Force clear any cached reference images"""
+        if hasattr(self, 'stored_ref_image'):
+            del self.stored_ref_image
+        if hasattr(self, 'stored_text_cond'):
+            del self.stored_text_cond  
 
     def _predict_eps_from_xstart(self, x_t, t, pred_xstart):
         return (extract_into_tensor(self.sqrt_recip_alphas_cumprod, t, x_t.shape) * x_t - pred_xstart) / \
@@ -1417,6 +1527,9 @@ class LatentDiffusion(DDPM):
         """
         assert 0.0 <= weight <= 1.0, "Blend weight must be between 0.0 and 1.0"
         self.ref_blend_weight = weight
+    
+    def set_amplify_image_features(self, amplify_image_features):
+        self.amplify_image_features = amplify_image_features
         
     def set_use_ref_img(self, use_ref_img: bool):
         """
@@ -1435,9 +1548,9 @@ class DiffusionWrapper(pl.LightningModule):
         self.conditioning_key = conditioning_key
         assert self.conditioning_key in [None, 'concat', 'crossattn', 'hybrid', 'adm', 'hybrid-adm', 'crossattn-adm']
 
-    def forward(self, x, t, c_concat: list = None, c_crossattn: list = None, c_adm=None):
+    def forward(self, x, t, c_concat: list = None, c_crossattn: list = None, c_adm=None, timestep_fraction=None):
         if self.conditioning_key is None:
-            out = self.diffusion_model(x, t)
+            out = self.diffusion_model(x, t, timestep_fraction=timestep_fraction)
         elif self.conditioning_key == 'concat':
             xc = torch.cat([x] + c_concat, dim=1)
             out = self.diffusion_model(xc, t)
