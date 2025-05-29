@@ -21,7 +21,7 @@ module load CUDA/12.1.1
 source activate ldmv2
 # conda install pytorch torchvision=0.18.1 pytorch-cuda=12.1 -c pytorch -c nvidia -y
 
-# Build the base command
+# Build the base command using individual aligner parameters (matching main_results.sh)
 CMD="uv run python scripts/txt2img.py \
   --prompt \"$PROMPT\" \
   --ckpt \"$CKPT\" \
@@ -29,9 +29,12 @@ CMD="uv run python scripts/txt2img.py \
   --H 768 --W 768 \
   --ref_img \"$REF_IMG\" \
   --ref_blend_weight \"$ALPHA\" \
-  --aligner_model_path \"$ALIGNER_MODEL\" \
+  --aligner_version v1 \
+  --aligner_dataset coco \
+  --aligner_loss combined \
   --fusion_token_type \"$FUSION_TOKEN_TYPE\" \
-  --fusion_type \"$FUSION_TYPE\""
+  --fusion_type \"$FUSION_TYPE\" \
+  --calculate_clip_score"
 
 
 echo "Running: $CMD"
