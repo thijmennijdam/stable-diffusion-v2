@@ -29,7 +29,7 @@ from ldm.models.autoencoder import IdentityFirstStage, AutoencoderKL
 from ldm.modules.diffusionmodules.util import make_beta_schedule, extract_into_tensor, noise_like
 from ldm.models.diffusion.ddim import DDIMSampler
 from ldm.modules.encoders.modules import FrozenOpenCLIPImageEmbedder
-from ldm.modules.vcf.aligner import ImageToTextAlignerV1, ImageToTextAlignerV2
+from ldm.modules.vcf.aligner import ImageToTextAlignerV1, ImageToTextAlignerV1_1, ImageToTextAlignerV2
 
 __conditioning_keys__ = {'concat': 'c_concat',
                          'crossattn': 'c_crossattn',
@@ -625,18 +625,18 @@ class LatentDiffusion(DDPM):
         print(f"Loading ImageToTextAligner from {model_path}")
         # Instantiate the correct aligner based on version and dropout
         if self.aligner_version == "v1":
-            self.image_to_text_aligner = ImageToTextAlignerV1(input_dim=1280, output_dim=1024).to(self.device)
+            try:
+                self.image_to_text_aligner = ImageToTextAlignerV1(input_dim=1280, output_dim=1024).to(self.device)
+                state_dict = torch.load(model_path, map_location=self.device)
+                self.image_to_text_aligner.load_state_dict(state_dict)
+            except:
+                self.image_to_text_aligner = ImageToTextAlignerV1_1(input_dim=1280, output_dim=1024).to(self.device)
+                state_dict = torch.load(model_path, map_location=self.device)
+                self.image_to_text_aligner.load_state_dict(state_dict)
         elif self.aligner_version == "v2":
             self.image_to_text_aligner = ImageToTextAlignerV2(input_dim=1280, output_dim=1024, dropout=self.aligner_dropout).to(self.device)
-        else:
-            raise ValueError(f"Unknown aligner version: {self.aligner_version}")
-
-        if os.path.isfile(model_path):
             state_dict = torch.load(model_path, map_location=self.device)
             self.image_to_text_aligner.load_state_dict(state_dict)
-            print("ImageToTextAligner loaded successfully.")
-        else:
-            raise FileNotFoundError(f"Model file not found at {model_path}")
 
     def make_cond_schedule(self, ):
         self.cond_ids = torch.full(size=(self.num_timesteps,), fill_value=self.num_timesteps - 1, dtype=torch.long)
@@ -1034,32 +1034,51 @@ class LatentDiffusion(DDPM):
                 if self.fusion_type == "cross_attention":
                     # Use cross-attention fusion instead of concatenation
                     blended_text_cond = self.cross_attention_fusion(self.stored_text_cond, image_token)  # [B, 77, D] -> [B, 77, D]
+                
                 elif self.fusion_type == "concat":
+                    print(image_token.shape)
+                    print(self.stored_text_cond.shape)
                     # Original concatenation approach
                     if self.ref_first:
                         blended_text_cond = torch.cat([image_token, self.stored_text_cond], dim=1)  # [B, N_selected+77, D]
                     else:
                         blended_text_cond = torch.cat([self.stored_text_cond, image_token], dim=1)  # [B, 77+N_selected, D]
-                
-                # Stack conditioned and unconditioned versions
-                cond = torch.cat([
-                    cond[:cond.shape[0] // 2],   
-                    blended_text_cond  # Full strength for conditioned part
-                                # Reduced strength for unconditioned part
-                ], dim=0)
-                
+
+                    # pad uncond part with zeros
+                    cond_first_half = cond[:cond.shape[0] // 2]  # shape: [3, 77, 1024]
+                    zeros = torch.zeros(cond_first_half.shape[0], 257, cond_first_half.shape[2], device=cond.device)
+                    first_dims_padded = torch.cat([cond_first_half, zeros], dim=1)  # shape: [3, 344, 1024]
+                    
+                if not self.fusion_type == "concat":
+                    # Stack conditioned and unconditioned versions
+                    cond = torch.cat([
+                        cond[:cond.shape[0] // 2],   
+                        blended_text_cond  # Full strength for conditioned part
+                                    # Reduced strength for unconditioned part
+                    ], dim=0)
+                else:
+                    print(first_dims_padded.shape)
+                    print(blended_text_cond.shape)
+                    cond = torch.cat([
+                        first_dims_padded,   
+                        blended_text_cond  # Full strength for conditioned part
+                                    # Reduced strength for unconditioned part
+                    ], dim=0)
+                    
         # Convert conditioning to dict format expected by UNet
         if isinstance(cond, dict):
+            # hybrid case, cond is expected to be a dict
             pass
         else:
+            # Assume cond is a tensor [B, ...] or list of tensors
             if not isinstance(cond, list):
                 cond = [cond]
             key = 'c_concat' if self.model.conditioning_key == 'concat' else 'c_crossattn'
             cond = {key: cond}
 
-        # Call the UNet without timestep_fraction since it doesn't support it
+        # The UNet diffusion model internally handles the stacked CFG input if necessary.
         x_recon = self.model(x_noisy, t, **cond)
-        
+
         if isinstance(x_recon, tuple) and not return_ids:
             return x_recon[0]
         else:
@@ -2121,15 +2140,9 @@ class CrossAttentionFusion(nn.Module):
         with torch.no_grad(): # Avoid tracking gradients for this calculation
             text_magnitude_target = torch.norm(text_tokens, p=2, dim=-1, keepdim=True).mean()
         
-        print(f"Alpha: {self.alpha.item():.4f}")
-        print(f"Original Text norm: {torch.norm(text_tokens, dim=-1).mean():.4f}")
-        print(f"Original Image norm: {torch.norm(image_tokens, dim=-1).mean():.4f}")
-        print(f"Target magnitude for scaling: {text_magnitude_target.item():.4f}")
-
         # --- 2. Scale image_tokens to match target_magnitude ---
         # These will be the "values" in attention
         image_tokens_scaled_to_text_norm = F.normalize(image_tokens, p=2, dim=-1) * text_magnitude_target
-        print(f"Image tokens scaled to text norm, new norm: {torch.norm(image_tokens_scaled_to_text_norm, dim=-1).mean():.4f}")
 
         # --- 3. Normalize tokens for calculating attention scores (Q and K) ---
         # This ensures attention scores are based on angular similarity
@@ -2145,11 +2158,9 @@ class CrossAttentionFusion(nn.Module):
         # --- 5. Attend to the high-magnitude scaled image tokens (Values) ---
         # attended_image will now have a norm close to text_magnitude_target (~33)
         attended_image = torch.matmul(attn_weights, image_tokens_scaled_to_text_norm)
-        print(f"Attended image (after attention with scaled values), norm: {torch.norm(attended_image, dim=-1).mean():.4f}")
 
         # --- 6. Fusion ---
         # Both original_text_tokens and attended_image now have similar magnitudes (~33)
         fused = (1 - self.alpha) * original_text_tokens + self.alpha * attended_image
-        print(f"Final Fused norm: {torch.norm(fused, dim=-1).mean():.4f}")
         
         return fused
