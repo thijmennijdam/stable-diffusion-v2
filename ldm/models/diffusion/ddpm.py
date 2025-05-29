@@ -1041,12 +1041,12 @@ class LatentDiffusion(DDPM):
                     else:
                         blended_text_cond = torch.cat([self.stored_text_cond, image_token], dim=1)  # [B, 77+N_selected, D]
                 
-                # Handle CFG by checking if cond has doubled batch size
-                if isinstance(cond, torch.Tensor):
-                    if cond.shape[0] == self.stored_text_cond.shape[0] * 2:
-                        cond = blended_text_cond.repeat(2, 1, 1)
-                    else:
-                        cond = blended_text_cond
+                # Stack conditioned and unconditioned versions
+                cond = torch.cat([
+                    cond[:3],   
+                    blended_text_cond  # Full strength for conditioned part
+                                # Reduced strength for unconditioned part
+                ], dim=0)
                 
         # Convert conditioning to dict format expected by UNet
         if isinstance(cond, dict):
