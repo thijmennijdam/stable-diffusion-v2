@@ -1222,33 +1222,49 @@ class LatentDiffusion(DDPM):
                 
                 # Use amplified features for blending
                 alpha = self.ref_blend_weight
-                blended_text_cond = (1 - alpha) * self.stored_text_cond + alpha * amplified_image_features
+                # blended_text_cond = (1 - alpha) * self.stored_text_cond + alpha * amplified_image_features
+                blended_text_cond = (1 - alpha) * self.stored_text_cond + alpha * image_features
                 
                 # Debug the new conditioning influence
-                diff_from_original = torch.norm(blended_text_cond - self.stored_text_cond).item()
-                relative_change = diff_from_original / text_norm if text_norm > 0 else 0
+                # diff_from_original = torch.norm(blended_text_cond - self.stored_text_cond).item()
+                # relative_change = diff_from_original / text_norm if text_norm > 0 else 0
                 
-                print(f"CONDITIONING DEBUG (AMPLIFIED):")
-                print(f"  Blended conditioning norm: {torch.norm(blended_text_cond).item():.6f}")
-                print(f"  Absolute change: {diff_from_original:.6f}")
-                print(f"  Relative change: {relative_change:.3%}")
-                print(f"  New Image/Text ratio: {torch.norm(amplified_image_features).item()/text_norm:.6f}")
+                # print(f"CONDITIONING DEBUG (AMPLIFIED):")
+                # print(f"  Blended conditioning norm: {torch.norm(blended_text_cond).item():.6f}")
+                # print(f"  Absolute change: {diff_from_original:.6f}")
+                # print(f"  Relative change: {relative_change:.3%}")
+                # print(f"  New Image/Text ratio: {torch.norm(amplified_image_features).item()/text_norm:.6f}")
                 
-                print(f"DEBUG: Blended conditioning shape: {blended_text_cond.shape}")
-                print(f"DEBUG: Blend weight (alpha): {alpha}")
+                # print(f"DEBUG: Blended conditioning shape: {blended_text_cond.shape}")
+                # print(f"DEBUG: Blend weight (alpha): {alpha}")
                 
                 # Handle CFG by checking if cond has doubled batch size
-                if isinstance(cond, torch.Tensor):
-                    print(f"DEBUG: cond is tensor, replacing directly")
-                    if cond.shape[0] == self.stored_text_cond.shape[0] * 2:
-                        print(f"DEBUG: CFG detected, repeating blended conditioning")
-                        cond = blended_text_cond.repeat(2, 1, 1)
-                    else:
-                        print(f"DEBUG: Normal case, using blended conditioning as-is")
-                        cond = blended_text_cond
+                
+                if cond.shape[0] == self.stored_text_cond.shape[0] * 2:
+                    print(f"DEBUG: cond shape: {cond.shape}")
+                    print(f"DEBUG: CFG detected, applying scaled conditioning")
+                    # Create weaker version for unconditioned part
+                    uncond_alpha = self.ref_blend_weight * 0.0  # or try different scaling factors
+                    uncond_blend = (1 - uncond_alpha) * self.stored_text_cond + uncond_alpha * image_features
+                    
+                    # Stack conditioned and unconditioned versions
+                    cond = torch.cat([
+                        cond[:3],             # Reduced strength for unconditioned part
+                        blended_text_cond  # Full strength for conditioned part
+                    ], dim=0)
+                    
+                    # split the conditioning into the conditioned and unconditioned parts
+                    # cond shape: torch.Size([6, 77, 1024]) where 6 is the doubled batch size and we want to split it into two parts of shape torch.Size([3, 77, 1024])
+                    # for i in range(cond.shape[0]):
+                    #     print(f"DEBUG: shape of blended_text_cond: {blended_text_cond.shape}")
+                    #     if i in [0, 1, 2]:
+                    #         cond[i] = blended_text_cond
+                    
+                    
+                    
                 else:
-                    print(f"DEBUG: cond is not tensor, type: {type(cond)}")
-                        
+                    print(f"DEBUG: Normal case, using blended conditioning as-is")
+                    cond = blended_text_cond
             else:
                 # Use pure text conditioning - don't modify the original conditioning
                 print(f"DEBUG: Using pure text conditioning (no modification)")

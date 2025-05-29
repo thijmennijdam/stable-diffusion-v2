@@ -17,8 +17,6 @@ module load CUDA/12.1.1
 # Activate Conda environment
 source activate ldmv2
 
-conda install pytorch torchvision=0.18.1 pytorch-cuda=12.1 -c pytorch -c nvidia -y
-
 python -c "import torch; print(f'🔧 Torch: {torch.__version__}, CUDA: {torch.version.cuda}, Arch: {torch.cuda.get_device_capability()}')"
 
 # Run inference
@@ -29,8 +27,8 @@ python scripts/txt2img.py \
   --H 768 --W 768 \
   --ref_img "data/cat.jpg" \
   --aligner_model_path "weights/aligner_models/version_v1/dataset_flickr30k/loss_infonce/batch_64/model_best.pth" \
-  --ref_blend_weight 0.1 \
-  --timestep_cond_start 0.5 \
+  --ref_blend_weight 0.3 \
+  --timestep_cond_start 0.0 \
   --timestep_cond_end 1.0
 
 
