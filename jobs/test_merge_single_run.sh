@@ -71,7 +71,7 @@ uv run python scripts/txt2img.py \
   --ckpt ./weights/v2-1_768-ema-pruned.ckpt \
   --config configs/stable-diffusion/v2-inference-v.yaml \
   --H 768 --W 768 \
-  --ref_img data/picasso_style.jpg \
+  --ref_img data/cat.jpg \
   --ref_blend_weight 0.3 \
   --aligner_version v1 \
   --aligner_dataset coco \

@@ -29,7 +29,7 @@ from ldm.models.autoencoder import IdentityFirstStage, AutoencoderKL
 from ldm.modules.diffusionmodules.util import make_beta_schedule, extract_into_tensor, noise_like
 from ldm.models.diffusion.ddim import DDIMSampler
 from ldm.modules.encoders.modules import FrozenOpenCLIPImageEmbedder
-from ldm.modules.vcf.aligner import ImageToTextAlignerV1, ImageToTextAlignerV2
+from ldm.modules.vcf.aligner import ImageToTextAlignerV1, ImageToTextAlignerV1_1, ImageToTextAlignerV2
 
 __conditioning_keys__ = {'concat': 'c_concat',
                          'crossattn': 'c_crossattn',
@@ -614,18 +614,20 @@ class LatentDiffusion(DDPM):
         print(f"Loading ImageToTextAligner from {model_path}")
         # Instantiate the correct aligner based on version and dropout
         if self.aligner_version == "v1":
-            self.image_to_text_aligner = ImageToTextAlignerV1(input_dim=1280, output_dim=1024).to(self.device)
+            try:
+                self.image_to_text_aligner = ImageToTextAlignerV1(input_dim=1280, output_dim=1024).to(self.device)
+                state_dict = torch.load(model_path, map_location=self.device)
+                self.image_to_text_aligner.load_state_dict(state_dict)
+            except:
+                self.image_to_text_aligner = ImageToTextAlignerV1_1(input_dim=1280, output_dim=1024).to(self.device)
+                state_dict = torch.load(model_path, map_location=self.device)
+                self.image_to_text_aligner.load_state_dict(state_dict)
         elif self.aligner_version == "v2":
             self.image_to_text_aligner = ImageToTextAlignerV2(input_dim=1280, output_dim=1024, dropout=self.aligner_dropout).to(self.device)
-        else:
-            raise ValueError(f"Unknown aligner version: {self.aligner_version}")
-
-        if os.path.isfile(model_path):
             state_dict = torch.load(model_path, map_location=self.device)
             self.image_to_text_aligner.load_state_dict(state_dict)
-            print("ImageToTextAligner loaded successfully.")
         else:
-            raise FileNotFoundError(f"Model file not found at {model_path}")
+            raise ValueError(f"Unknown aligner version: {self.aligner_version}")
 
     def make_cond_schedule(self, ):
         self.cond_ids = torch.full(size=(self.num_timesteps,), fill_value=self.num_timesteps - 1, dtype=torch.long)
@@ -770,7 +772,8 @@ class LatentDiffusion(DDPM):
                 else:
                     c = torch.cat([c, image_token], dim=1)  # [B, 77+N_selected, D]
 
-        return c
+        return 
+    
     
 
     def meshgrid(self, h, w):
