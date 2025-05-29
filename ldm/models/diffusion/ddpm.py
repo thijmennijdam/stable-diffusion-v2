@@ -1043,7 +1043,7 @@ class LatentDiffusion(DDPM):
                 
                 # Stack conditioned and unconditioned versions
                 cond = torch.cat([
-                    cond[:3],   
+                    cond[:cond.shape[0] // 2],   
                     blended_text_cond  # Full strength for conditioned part
                                 # Reduced strength for unconditioned part
                 ], dim=0)
