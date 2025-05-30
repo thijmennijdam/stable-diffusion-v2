@@ -502,8 +502,9 @@ def main(opt):
     def clean(s):
         return s.replace(" ", "_").replace("/", "_").replace("-", "_").lower()
 
+    pno_standard = "pno" if opt.use_pno_trajectory else "standard"
     wandb_run_name = (
-        "pno" if opt.use_pno_trajectory else "standard"
+        f"{pno_standard}|"
         f"|fusion_type={opt.fusion_type}"
         f"|prompt={clean(opt.prompt)[:30]}"
         f"|ref_img={os.path.splitext(os.path.basename(opt.ref_img))[0] if opt.ref_img else 'noref'}"

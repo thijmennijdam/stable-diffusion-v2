@@ -142,15 +142,15 @@ def optimize_prompt_noise_trajectory(
             initial_x_sample_viz_np = 255. * rearrange(initial_x_sample_viz[0].cpu().numpy(), 'c h w -> h w c')
             wandb.log({
                 "PNO Intermediate Sample": wandb.Image(initial_x_sample_viz_np.astype(np.uint8), 
-                                                  caption=f"PNO Opt Step 0/{opt_cmd.pno_steps} (Initial)"),
+                                                  caption=f"PNO Opt Step 0/{opt_cmd.pno_steps}"),
                 "CLIP Loss (prompt)": initial_objective_loss.item(),
                 "Noise Regularization Loss": opt_cmd.pno_noise_reg_gamma * initial_reg_term.item(), 
                 "PNO Total Loss": (initial_objective_loss + opt_cmd.pno_noise_reg_gamma * initial_reg_term).item(),
-            }, step=-1) 
+            }, step=0) 
 
     if opt_cmd.pno_steps > 0 : 
         print(f"Starting PNO trajectory optimization with {opt_cmd.pno_steps} PNO steps...")
-        for pno_step_idx in range(opt_cmd.pno_steps): 
+        for pno_step_idx in range(1, opt_cmd.pno_steps+1): 
             optimizer.zero_grad()
             samples_latent, _ = sampler_ldm.sample(
                 S=opt_cmd.steps, conditioning=fused_prompt_optimized, batch_size=1, shape=shape_latent,
@@ -190,14 +190,14 @@ def optimize_prompt_noise_trajectory(
                 if parameters_with_grads: 
                     torch.nn.utils.clip_grad_norm_(parameters_with_grads, opt_cmd.pno_clip_grad_norm)
             optimizer.step()
-            print(f"[PNO Traj. Step {pno_step_idx+1}/{opt_cmd.pno_steps}] ObjL: {objective_loss.item():.4f}, RegL: {reg_term.item():.4f}, TotL: {total_loss.item():.4f}")
+            print(f"[PNO Traj. Step {pno_step_idx}/{opt_cmd.pno_steps}] ObjL: {objective_loss.item():.4f}, RegL: {reg_term.item():.4f}, TotL: {total_loss.item():.4f}")
             if wandb.run: 
                 with torch.no_grad():
                     x_sample_viz = torch.clamp((x_samples_img_from_pno_step + 1.0) / 2.0, min=0.0, max=1.0)
                     x_sample_viz_np = 255. * rearrange(x_sample_viz[0].cpu().numpy(), 'c h w -> h w c')
                     wandb.log({
                         "PNO Intermediate Sample": wandb.Image(x_sample_viz_np.astype(np.uint8), 
-                                                          caption=f"PNO Opt Step {pno_step_idx + 1}/{opt_cmd.pno_steps}"),
+                                                          caption=f"PNO Opt Step {pno_step_idx}/{opt_cmd.pno_steps}"),
                         "CLIP Loss (prompt)": objective_loss.item(),
                         "Noise Regularization Loss": opt_cmd.pno_noise_reg_gamma * reg_term.item(),
                         "PNO Total Loss": total_loss.item(),
