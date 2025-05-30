@@ -173,3 +173,4 @@ uv.lock
 thijmen.md
 model_checkpoint.ckpt
 weights/
+outputs_main_results/
