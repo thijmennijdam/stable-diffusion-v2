@@ -5,19 +5,19 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ROOT_DIR="${SCRIPT_DIR}/.."
 
 # Small set of alpha values for testing
-ALPHAS=(0)
+ALPHAS=(0.3)
 
-ALIGNER_LOSS="combined"
+ALIGNER_LOSSES=("combined", "infonce", "cross_attention")
 
 # Fusion token type (using "all" as in main_results.sh)
 FUSION_TOKEN_TYPE="all"
 
 # All fusion types from main_results.sh
-FUSION_TYPES=("alpha_blend")
+FUSION_TYPES=("concat")
 
-# All reference images from data folder
+All reference images from data folder
 REF_IMAGES=(
-  "data/texture.jpg"
+  # "data/texture.jpg"
   "data/doggo.jpg" 
   "data/mattise.jpg"
   "data/totoro.jpg"
@@ -49,7 +49,7 @@ mkdir -p "${SCRIPT_DIR}/../logs"
 
 echo "Starting main results experiment with:"
 echo "  - Alpha values: ${ALPHAS[*]}"
-echo "  - Aligner loss: ${ALIGNER_LOSS}"
+echo "  - Aligner model: $(basename "$ALIGNER_MODEL")"
 echo "  - Fusion token type: ${FUSION_TOKEN_TYPE}"
 echo "  - Fusion methods: ${FUSION_TYPES[*]}"
 echo "  - Reference images: ${#REF_IMAGES[@]} images"
@@ -57,13 +57,15 @@ echo "  - Total jobs: $((${#ALPHAS[@]} * ${#FUSION_TYPES[@]} * ${#REF_IMAGES[@]}
 echo ""
 
 # Run conditioned experiments (alpha > 0)
-echo "=== Submitting experiments ==="
+echo "=== Submitting conditioned experiments ==="
 for ALPHA in "${ALPHAS[@]}"; do
   for FUSION_TYPE in "${FUSION_TYPES[@]}"; do
-    for REF_IMG in "${REF_IMAGES[@]}"; do
-      REF_IMG_NAME=$(basename "$REF_IMG" | cut -d. -f1)
-      echo "Submitting job: alpha=${ALPHA}, fusion=${FUSION_TYPE}, ref=${REF_IMG_NAME}"
-      sbatch --export=ALL,ALPHA=$ALPHA,PROMPT="$PROMPT",REF_IMG="$REF_IMG",ALIGNER_LOSS="$ALIGNER_LOSS",CONFIG="$CONFIG",CKPT="$CKPT",ROOT_DIR="$ROOT_DIR",FUSION_TOKEN_TYPE="$FUSION_TOKEN_TYPE",FUSION_TYPE="$FUSION_TYPE" "$JOB_SCRIPT"
+    for ALIGNER_LOSS in "${ALIGNER_LOSSES[@]}"; do
+      for REF_IMG in "${REF_IMAGES[@]}"; do
+        REF_IMG_NAME=$(basename "$REF_IMG" | cut -d. -f1)
+        echo "Submitting job: alpha=${ALPHA}, fusion=${FUSION_TYPE}, ref=${REF_IMG_NAME}, aligner_loss=${ALIGNER_LOSS}"
+        sbatch --export=ALL,ALPHA=$ALPHA,PROMPT="$PROMPT",REF_IMG="$REF_IMG",CONFIG="$CONFIG",CKPT="$CKPT",ROOT_DIR="$ROOT_DIR",FUSION_TOKEN_TYPE="$FUSION_TOKEN_TYPE",FUSION_TYPE="$FUSION_TYPE",ALIGNER_LOSS="$ALIGNER_LOSS" "$JOB_SCRIPT"
+      done
     done
   done
 done
@@ -71,4 +73,4 @@ done
 echo ""
 echo "All jobs submitted successfully!"
 echo "Total experiments: $((${#ALPHAS[@]} * ${#FUSION_TYPES[@]} * ${#REF_IMAGES[@]})) jobs"
-echo "Monitor with: squeue -u \$USER" 
+echo "Monitor with: squeue -u \$USER"   
