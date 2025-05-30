@@ -771,8 +771,7 @@ class LatentDiffusion(DDPM):
                     c = torch.cat([image_token, c], dim=1)  # [B, N_selected+77, D]
                 else:
                     c = torch.cat([c, image_token], dim=1)  # [B, 77+N_selected, D]
-
-        return 
+        return c
     
     
 
