@@ -5,7 +5,7 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ROOT_DIR="${SCRIPT_DIR}/.."
 
 # Small set of alpha values for testing
-ALPHAS=(0.3)
+ALPHAS=(0)
 
 # Best aligner model based on main_results.sh settings
 ALIGNER_MODEL="${ROOT_DIR}/weights/aligner_models/version_v1/dataset_coco/loss_combined/batch_64/model_best.pth"
@@ -14,7 +14,7 @@ ALIGNER_MODEL="${ROOT_DIR}/weights/aligner_models/version_v1/dataset_coco/loss_c
 FUSION_TOKEN_TYPE="all"
 
 # All fusion types from main_results.sh
-FUSION_TYPES=("alpha_blend" "concat" "cross_attention")
+FUSION_TYPES=("alpha_blend")
 
 All reference images from data folder
 REF_IMAGES=(
@@ -58,7 +58,7 @@ echo "  - Total jobs: $((${#ALPHAS[@]} * ${#FUSION_TYPES[@]} * ${#REF_IMAGES[@]}
 echo ""
 
 # Run conditioned experiments (alpha > 0)
-echo "=== Submitting conditioned experiments ==="
+echo "=== Submitting experiments ==="
 for ALPHA in "${ALPHAS[@]}"; do
   for FUSION_TYPE in "${FUSION_TYPES[@]}"; do
     for REF_IMG in "${REF_IMAGES[@]}"; do
