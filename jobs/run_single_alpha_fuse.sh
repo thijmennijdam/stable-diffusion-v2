@@ -31,7 +31,7 @@ CMD="uv run python scripts/txt2img.py \
   --ref_blend_weight \"$ALPHA\" \
   --aligner_version v1 \
   --aligner_dataset coco \
-  --aligner_loss combined \
+  --aligner_loss \"$ALIGNER_LOSS\" \
   --fusion_token_type \"$FUSION_TOKEN_TYPE\" \
   --fusion_type \"$FUSION_TYPE\" \
   --calculate_clip_score"

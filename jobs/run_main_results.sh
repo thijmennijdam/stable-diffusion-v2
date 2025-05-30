@@ -6,9 +6,7 @@ ROOT_DIR="${SCRIPT_DIR}/.."
 
 # Small set of alpha values for testing
 ALPHAS=(0.3)
-
-# Best aligner model based on main_results.sh settings
-ALIGNER_MODEL="${ROOT_DIR}/weights/aligner_models/version_v1/dataset_coco/loss_combined/batch_64/model_best.pth"
+ALIGNER_LOSS="combined"
 
 # Fusion token type (using "all" as in main_results.sh)
 FUSION_TOKEN_TYPE="all"
@@ -50,7 +48,7 @@ mkdir -p "${SCRIPT_DIR}/../logs"
 
 echo "Starting main results experiment with:"
 echo "  - Alpha values: ${ALPHAS[*]}"
-echo "  - Aligner model: $(basename "$ALIGNER_MODEL")"
+echo "  - Aligner loss: ${ALIGNER_LOSS}"
 echo "  - Fusion token type: ${FUSION_TOKEN_TYPE}"
 echo "  - Fusion methods: ${FUSION_TYPES[*]}"
 echo "  - Reference images: ${#REF_IMAGES[@]} images"
@@ -64,7 +62,10 @@ for ALPHA in "${ALPHAS[@]}"; do
     for REF_IMG in "${REF_IMAGES[@]}"; do
       REF_IMG_NAME=$(basename "$REF_IMG" | cut -d. -f1)
       echo "Submitting job: alpha=${ALPHA}, fusion=${FUSION_TYPE}, ref=${REF_IMG_NAME}"
-      sbatch --export=ALL,ALPHA=$ALPHA,PROMPT="$PROMPT",REF_IMG="$REF_IMG",ALIGNER_MODEL="$ALIGNER_MODEL",CONFIG="$CONFIG",CKPT="$CKPT",ROOT_DIR="$ROOT_DIR",FUSION_TOKEN_TYPE="$FUSION_TOKEN_TYPE",FUSION_TYPE="$FUSION_TYPE" "$JOB_SCRIPT"
+      sbatch --export=ALL,ALPHA=$ALPHA,PROMPT="$PROMPT",REF_IMG="$REF_IMG",ALIGNER_LOSS="$ALIGNER_LOSS",CONFIG="$CONFIG",CKPT="$CKPT",ROOT_DIR="$ROOT_DIR",FUSION_TOKEN_TYPE="$FUSION_TOKEN_TYPE",FUSION_TYPE="$FUSION_TYPE" "$JOB_SCRIPT"
+      
+      # Add sleep between job submissions (e.g., 1 second)
+      sleep 3
     done
   done
 done
@@ -72,4 +73,4 @@ done
 echo ""
 echo "All jobs submitted successfully!"
 echo "Total experiments: $((${#ALPHAS[@]} * ${#FUSION_TYPES[@]} * ${#REF_IMAGES[@]})) jobs"
-echo "Monitor with: squeue -u \$USER" 
+echo "Monitor with: squeue -u \$USER"   
