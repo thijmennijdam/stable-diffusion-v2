@@ -281,7 +281,7 @@ def parse_args():
         "--aligner_loss",
         type=str,
         default="infonce",
-        choices=["infonce", "mmd", "mse"],
+        choices=["infonce", "combined", "cross_attention"],
         help="Loss function used for training the aligner"
     )
     parser.add_argument(
