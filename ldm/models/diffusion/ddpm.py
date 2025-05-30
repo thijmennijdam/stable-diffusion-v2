@@ -609,6 +609,8 @@ class LatentDiffusion(DDPM):
         # if self.use_ref_img:
         #     self.create_ref_img_encoder()
 
+        # # if self.use_ref_img:
+        # self.image_dim_projection = nn.Linear(1280, 1024).to(self.device)
 
     def create_ref_img_encoder(self):
         print("Using CLIP model for reference image encoding.")
@@ -1046,7 +1048,15 @@ class LatentDiffusion(DDPM):
 
                     # pad uncond part with zeros
                     cond_first_half = cond[:cond.shape[0] // 2]  # shape: [3, 77, 1024]
-                    zeros = torch.zeros(cond_first_half.shape[0], 257, cond_first_half.shape[2], device=cond.device)
+                    if self.fusion_token_type == "cls_only":
+                        zeros = torch.zeros(cond_first_half.shape[0], 1, cond_first_half.shape[2], device=cond.device)
+                    elif self.fusion_token_type == "except_cls":
+                        zeros = torch.zeros(cond_first_half.shape[0], 256, cond_first_half.shape[2], device=cond.device)
+                    elif self.fusion_token_type == "all":
+                        zeros = torch.zeros(cond_first_half.shape[0], 257, cond_first_half.shape[2], device=cond.device)
+                    else:
+                        raise ValueError(f"Invalid fusion_token_type: {self.fusion_token_type}. "
+                                        f"Must be one of: 'cls_only', 'except_cls', 'all'")
                     first_dims_padded = torch.cat([cond_first_half, zeros], dim=1)  # shape: [3, 344, 1024]
                     
                 if not self.fusion_type == "concat":
