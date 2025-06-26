@@ -63,9 +63,11 @@ try:
         data = json.load(f)
     summary = data['summary']
     print(f\"Processed {summary['total_samples']} samples from {summary['total_folders']} folders\")
-    if summary['overall_avg_clip'] is not None:
-        print(f\"Average CLIP: {summary['overall_avg_clip']:.4f} (±{summary['overall_std_clip']:.4f})\")
-        print(f\"Min CLIP: {summary['overall_min_clip']:.4f}, Max CLIP: {summary['overall_max_clip']:.4f}\")
+    if summary['overall_avg_combined_clip'] is not None:
+        print(f\"Average Text-to-Image CLIP: {summary['overall_avg_text_to_image_clip']:.4f} (±{summary['overall_std_text_to_image_clip']:.4f})\")
+        print(f\"Average Image-to-Image CLIP: {summary['overall_avg_image_to_image_clip']:.4f} (±{summary['overall_std_image_to_image_clip']:.4f})\")
+        print(f\"Average Combined CLIP: {summary['overall_avg_combined_clip']:.4f} (±{summary['overall_std_combined_clip']:.4f})\")
+        print(f\"Combined CLIP Range: {summary['overall_min_combined_clip']:.4f} - {summary['overall_max_combined_clip']:.4f}\")
     else:
         print('No valid results found')
 except Exception as e:
@@ -96,10 +98,18 @@ summary_entry = {
     'job_id': os.getenv('SLURM_JOB_ID', 'unknown'),
     'total_samples': data['summary']['total_samples'],
     'total_folders': data['summary']['total_folders'],
-    'avg_clip': data['summary']['overall_avg_clip'],
-    'std_clip': data['summary']['overall_std_clip'],
-    'min_clip': data['summary']['overall_min_clip'],
-    'max_clip': data['summary']['overall_max_clip'],
+    'avg_text_to_image_clip': data['summary']['overall_avg_text_to_image_clip'],
+    'avg_image_to_image_clip': data['summary']['overall_avg_image_to_image_clip'],
+    'avg_combined_clip': data['summary']['overall_avg_combined_clip'],
+    'std_text_to_image_clip': data['summary']['overall_std_text_to_image_clip'],
+    'std_image_to_image_clip': data['summary']['overall_std_image_to_image_clip'],
+    'std_combined_clip': data['summary']['overall_std_combined_clip'],
+    'min_text_to_image_clip': data['summary']['overall_min_text_to_image_clip'],
+    'max_text_to_image_clip': data['summary']['overall_max_text_to_image_clip'],
+    'min_image_to_image_clip': data['summary']['overall_min_image_to_image_clip'],
+    'max_image_to_image_clip': data['summary']['overall_max_image_to_image_clip'],
+    'min_combined_clip': data['summary']['overall_min_combined_clip'],
+    'max_combined_clip': data['summary']['overall_max_combined_clip'],
     'detailed_file': '$OUTPUT_FILE'
 }
 
