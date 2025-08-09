@@ -2,7 +2,7 @@
 #SBATCH --partition=gpu_a100
 #SBATCH --gpus=1
 #SBATCH --cpus-per-task=16
-#SBATCH --output=outputs/jobs/%A.out
+#SBATCH --output=outputs/jobs/run_alpha_${ALPHA}_%A.out
 #SBATCH --time=00:10:00
 #SBATCH --mem=40G
 

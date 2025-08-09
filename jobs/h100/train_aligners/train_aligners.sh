@@ -1,6 +1,6 @@
 #!/bin/bash
 
-declare -a VERSIONS=("v1")
+declare -a VERSIONS=("v3")
 declare -a DATASETS=("coco")
 # declare -a LOSSES=("infonce" "cross_attention" "combined")
 declare -a LOSSES=("combined")

@@ -17,15 +17,7 @@ NUM_SEEDS=1
 FUSION_TOKEN_TYPE="all"
 
 # All fusion types from main_results.sh
-# FUSION_TYPES=("alpha_blend" "concat")
-FUSION_TYPES=("alpha_blend")
-
-
-# Generate sequential seeds
-SEEDS=()
-for ((i=1; i<=NUM_SEEDS; i++)); do
-  SEEDS+=($i)
-done
+FUSION_TYPES=("alpha_blend" "concat")
 
 # All reference images from data folder
 REF_IMAGES=(
