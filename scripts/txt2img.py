@@ -275,8 +275,8 @@ def parse_args():
         "--aligner_version",
         type=str,
         default="v1",
-        choices=["v1", "v2"],
-        help="Aligner model version (v1 or v2)"
+        choices=["v1", "v2", "v3"],
+        help="Aligner model version (v1, v2 or v3)"
     )
     parser.add_argument(
         "--aligner_dataset",

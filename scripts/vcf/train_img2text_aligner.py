@@ -16,7 +16,7 @@ from ldm.modules.encoders.modules import (
 from dotenv import load_dotenv
 from sklearn.model_selection import train_test_split
 from typing import List, Tuple
-from ldm.modules.vcf.aligner import ImageToTextAlignerV1, ImageToTextAlignerV2
+from ldm.modules.vcf.aligner import ImageToTextAlignerV1, ImageToTextAlignerV2, ImageToTextAlignerV3
 import numpy as np
 import math
 import sys
@@ -208,6 +208,8 @@ def train_aligner(
         aligner = ImageToTextAlignerV1(input_dim=1280, output_dim=1024).to(device)
     elif args.version == "v2":
         aligner = ImageToTextAlignerV2(input_dim=1280, output_dim=1024).to(device)
+    elif args.version == "v3":
+        aligner = ImageToTextAlignerV3(input_dim=1280, output_dim=1024).to(device)
     else:
         raise ValueError(f"Unknown aligner version: {args.version}")
 
@@ -340,7 +342,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--save_every", type=int, default=5, help="Save model every N epochs")
     parser.add_argument("--resume_from", type=str, default=None, help="Path to a pretrained aligner checkpoint")
     parser.add_argument("--seed", type=int, default=42, help="Random seed for reproducibility")
-    parser.add_argument("--version", type=str, default="v2", choices=["v1", "v2"], help="Aligner model version (v1 or v2)")
+    parser.add_argument("--version", type=str, default="v2", choices=["v1", "v2", "v3"], help="Aligner model version (v1, v2 or v3)")
     parser.add_argument("--infonce_lambda", type=float, default=0.2, help="Weight for InfoNCE loss in combined loss")
     return parser.parse_args()
 

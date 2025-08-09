@@ -29,7 +29,7 @@ from ldm.models.autoencoder import IdentityFirstStage, AutoencoderKL
 from ldm.modules.diffusionmodules.util import make_beta_schedule, extract_into_tensor, noise_like
 from ldm.models.diffusion.ddim import DDIMSampler
 from ldm.modules.encoders.modules import FrozenOpenCLIPImageEmbedder
-from ldm.modules.vcf.aligner import ImageToTextAlignerV1, ImageToTextAlignerV1_1, ImageToTextAlignerV2
+from ldm.modules.vcf.aligner import ImageToTextAlignerV1, ImageToTextAlignerV1_1, ImageToTextAlignerV2, ImageToTextAlignerV3
 
 __conditioning_keys__ = {'concat': 'c_concat',
                          'crossattn': 'c_crossattn',
@@ -637,6 +637,10 @@ class LatentDiffusion(DDPM):
                 self.image_to_text_aligner.load_state_dict(state_dict)
         elif self.aligner_version == "v2":
             self.image_to_text_aligner = ImageToTextAlignerV2(input_dim=1280, output_dim=1024, dropout=self.aligner_dropout).to(self.device)
+            state_dict = torch.load(model_path, map_location=self.device)
+            self.image_to_text_aligner.load_state_dict(state_dict)
+        elif self.aligner_version == "v3":
+            self.image_to_text_aligner = ImageToTextAlignerV3(input_dim=1280, output_dim=1024, dropout=self.aligner_dropout).to(self.device)
             state_dict = torch.load(model_path, map_location=self.device)
             self.image_to_text_aligner.load_state_dict(state_dict)
 
