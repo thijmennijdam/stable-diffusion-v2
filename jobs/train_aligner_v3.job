@@ -1,0 +1,29 @@
+#!/bin/bash
+#SBATCH --partition=gpu_a100
+#SBATCH --gpus=1
+#SBATCH --cpus-per-task=16
+#SBATCH --mem=80G
+#SBATCH --time=08:00:00
+#SBATCH --job-name=aligner_v3_train
+#SBATCH --output=logs/aligner_v3_%j.out
+#SBATCH --error=logs/aligner_v3_%j.err
+
+echo "✅ Job started at: $(date)"
+
+# When using UV on a100, use the following:
+source .venv/bin/activate
+
+echo "�� Training Aligner V3 with combined loss..."
+uv run python scripts/vcf/train_img2text_aligner.py \
+  --datasets coco \
+  --loss combined \
+  --batch_size 32 \
+  --epochs 20 \
+  --lr 5e-5 \
+  --device cuda \
+  --save_every 5 \
+  --version v3 \
+  --infonce_lambda 0.3
+
+echo "✅ Job completed at: $(date)"
+echo "�� All done!"
